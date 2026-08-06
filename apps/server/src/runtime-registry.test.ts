@@ -6,10 +6,19 @@
 
 import { describe, expect, test } from "bun:test";
 import { RuntimeRegistry, RUNTIME_REFRESH_TTL_MS } from "./runtime-registry.js";
+import { AGENT_PRESETS } from "./agent-sidecar/presets.js";
+
+/** 快速 fake detect：返回全部 preset（available=false），避免真实 PATH 扫描（10s+）导致 5s 超时 */
+const fakeDetect = async () =>
+  Object.keys(AGENT_PRESETS).map((agentId) => ({
+    agentId,
+    available: false,
+    error: "fake (unit test)",
+  }));
 
 describe("RuntimeRegistry（§7.1 上报能力列表）", () => {
   test("list() 返回所有 preset 的 agent 能力（含可用/不可用、协议、引擎、headless 声明）", async () => {
-    const registry = new RuntimeRegistry({ deepProbe: false });
+    const registry = new RuntimeRegistry({ deepProbe: false, detect: fakeDetect });
     const capabilities = await registry.list();
 
     // 所有 preset 都上报（不依赖真实二进制）
@@ -32,14 +41,14 @@ describe("RuntimeRegistry（§7.1 上报能力列表）", () => {
   });
 
   test("I1: TTL 内重复 list() 命中缓存（不重复扫描 PATH）", async () => {
-    const registry = new RuntimeRegistry({ deepProbe: false });
+    const registry = new RuntimeRegistry({ deepProbe: false, detect: fakeDetect });
     const first = await registry.list();
     const second = await registry.list();
     expect(second).toBe(first); // 同一缓存引用
   });
 
   test("invalidate() 后强制重扫（返回新引用）", async () => {
-    const registry = new RuntimeRegistry({ deepProbe: false });
+    const registry = new RuntimeRegistry({ deepProbe: false, detect: fakeDetect });
     const first = await registry.list();
     registry.invalidate();
     const second = await registry.list();

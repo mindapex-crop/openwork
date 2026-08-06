@@ -84,6 +84,7 @@ export class RuntimeRegistry {
   async refresh(): Promise<RuntimeAgentCapability[]> {
     const results = await this.detectFn(this.path);
     const capabilities: RuntimeAgentCapability[] = [];
+    const probes: Promise<void>[] = [];
 
     for (const result of results) {
       const preset = AGENT_PRESETS[result.agentId];
@@ -100,15 +101,22 @@ export class RuntimeRegistry {
       };
 
       if (result.available && this.deepProbe) {
-        try {
-          base.detected = await this.probeAgent(result.agentId, preset);
-        } catch {
-          // I3: 深度探测失败仅丢弃 detected，不阻断上报
-        }
+        // 并行深度探测（每个 agent 冒烟最长 8s；串行会让全量上报慢到分钟级）
+        probes.push(
+          this.probeAgent(result.agentId, preset!).then(
+            (detected) => {
+              base.detected = detected;
+            },
+            () => {
+              // I3: 深度探测失败仅丢弃 detected，不阻断上报
+            },
+          ),
+        );
       }
       capabilities.push(base);
     }
 
+    await Promise.all(probes);
     this.cache = capabilities;
     this.cachedAt = Date.now();
     return capabilities;

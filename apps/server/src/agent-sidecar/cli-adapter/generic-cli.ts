@@ -60,7 +60,9 @@ function smokeTest(binaryPath: string, args: string[], env?: Record<string, stri
     const child = spawn(binaryPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, ...env },
-      timeout: 8000,
+      // 冒烟超时 3s（原 8s）：真实 LLM CLI 有 key 时冒烟 <1s 完成；无 key 时快速判负，
+      // 避免 RuntimeRegistry 全量探测被串成分钟级（每个 agent 最多 2 个候选 × 8s）。
+      timeout: 3000,
     });
     let settled = false;
     const finish = (ok: boolean) => {
