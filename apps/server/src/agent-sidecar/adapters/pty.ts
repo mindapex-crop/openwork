@@ -1,23 +1,19 @@
 /**
- * PtySidecarAdapter - PTY 协议 adapter
+ * PtySidecarAdapter - PTY 协议 adapter（支持两种执行模式）
+ *
+ * 模式 1：`headless-oneshot`（默认，对声明 headless=true 的 agent）
+ *   - 每次 prompt 用 cliProfile.headlessArgs spawn 一次性短进程
+ *   - prompt 通过 stdin 一次写完 → 关闭 stdin 触发 agent 开始处理 → 进程结束自动 exit
+ *   - 进程生命周期：acquire → (oneshot exec) → release → 立即 stop，无 idle 复用
+ *   - 结果：**用完自动释放，0 进程泄漏，不占 PTY 进程池并发配额**（配额给兜底 persistent-pty）
+ *
+ * 模式 2：`persistent-pty`（最后兜底，给交互式 CLI，如 Freebuff / Cursor-agent / 通义灵码）
+ *   - 进程常驻 + stdin 反复写 prompt（或解析 ANSI）
+ *   - 必须进入全局 SidecarProcessPool（默认上限 PTY=3）避免爆机器
+ *   - release 后进 idle，超时回收 + FinalizationRegistry GC 兜底
  *
  * 借鉴 orca 的设计："Works with any CLI agent — if it runs in a terminal, it runs in Orca"
  * 不抽象 agent，直接 spawn 进程 + 解析输出。
- *
- * 一个 adapter 覆盖 21+ PTY agent：
- * - claude-code (-p)
- * - codex
- * - cursor-agent
- * - gemini
- * - copilot
- * - amp, cline, codebuff, continue, droid, kilocode, mistral-vibe
- * - qwen-code, rovo-dev, auggie, command-code, autohand, crush, mimo, devin
- *
- * PoC 已验证：spawn + stdout/stderr 捕获正常工作。
- *
- * 输出解析（参考 paperclip Generic adapter 的 output_handler）：
- * - 通过 config.outputParser 选择 jsonl | ansi | regex | none
- * - 通过 createOutputEvents() 获取 AsyncIterable<AgentEvent>
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -26,6 +22,7 @@ import { buildTransportEnv } from "../transport.js";
 import { bindStreamToParser, createOutputParser, type OutputParser } from "../output-parser.js";
 import { BaseSidecarAdapter } from "./base.js";
 import type { AgentEvent, SidecarHandle, SidecarStartOptions, TransportInfo } from "../types.js";
+import type { PtyExecutionMode } from "../presets.js";
 
 export class PtySidecarAdapter extends BaseSidecarAdapter {
   readonly protocol = "pty" as const;
@@ -34,12 +31,21 @@ export class PtySidecarAdapter extends BaseSidecarAdapter {
   private stdoutParser: OutputParser | null = null;
   private stderrParser: OutputParser | null = null;
 
+  /** 当前执行模式：由外部 registry.createAdapterForAgent() 注入 selectedPreset 决定；默认 persistent-pty 兜底最安全 */
+  public executionMode: PtyExecutionMode = "persistent-pty";
+
   override async start(options: SidecarStartOptions): Promise<SidecarHandle> {
     const binary = this.config.binaryPath ?? this.config.binary;
     if (!binary) {
       throw new Error(`PTY adapter requires 'binary' or 'binaryPath' for agent '${this.config.agentId}'`);
     }
-    const args = this.config.args ?? [];
+
+    // headless-oneshot: 用 cliProfile.headlessArgs 替换 args（更安全：用完自动 exit）
+    // persistent-pty: 用 config.args 默认（一般为空 → 进入交互模式）
+    const isOneShot = this.executionMode === "headless-oneshot";
+    const headlessArgs = (this.config as unknown as { cliProfile?: { headlessArgs?: string[] } }).cliProfile?.headlessArgs;
+    const args = isOneShot && headlessArgs && headlessArgs.length > 0 ? headlessArgs : (this.config.args ?? []);
+
     const cleanPath = resolveCleanPath(options.path);
 
     const env: Record<string, string | undefined> = {

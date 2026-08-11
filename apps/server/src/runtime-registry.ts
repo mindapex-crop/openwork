@@ -51,6 +51,16 @@ export interface RuntimeAgentCapability {
   detected?: CliCapabilities;
   /** 检测错误（仅 available=false 时） */
   error?: string;
+  /** preset 声明的能力（供 UI 判定是否支持模型切换等） */
+  capabilities?: Record<string, boolean>;
+  /** UI 展示用的厂商 */
+  vendor?: string;
+  homepage?: string;
+  installHint?: string;
+  /** 协议优选顺序 */
+  preferProtocolOrder?: Array<string>;
+  /** 执行模式（仅 PTY 有意义） */
+  executionMode?: "headless-oneshot" | "persistent-pty";
 }
 
 export interface RuntimeRegistryOptions {
@@ -98,17 +108,22 @@ export class RuntimeRegistry {
         engine: preset ? engineForProtocol(preset.protocol) : "generic",
         declaredHeadless: preset?.cliProfile?.headless === true,
         error: result.error,
+        capabilities: preset?.capabilities,
+        vendor: preset?.vendor,
+        homepage: preset?.homepage,
+        installHint: preset?.installHint,
+        preferProtocolOrder: preset?.preferProtocolOrder,
+        executionMode: preset?.executionMode,
       };
 
-      if (result.available && this.deepProbe) {
-        // 并行深度探测（每个 agent 冒烟最长 8s；串行会让全量上报慢到分钟级）
+      if (result.available && preset && this.deepProbe) {
         probes.push(
-          this.probeAgent(result.agentId, preset!).then(
+          this.probeAgent(result.agentId, preset).then(
             (detected) => {
               base.detected = detected;
             },
             () => {
-              // I3: 深度探测失败仅丢弃 detected，不阻断上报
+              // I3
             },
           ),
         );
@@ -153,6 +168,12 @@ export class RuntimeRegistry {
       engine: engineForProtocol(preset.protocol ?? "generic"),
       declaredHeadless: preset.cliProfile?.headless === true,
       error: result.error,
+      capabilities: preset.capabilities,
+      vendor: preset.vendor,
+      homepage: preset.homepage,
+      installHint: preset.installHint,
+      preferProtocolOrder: preset.preferProtocolOrder,
+      executionMode: preset.executionMode,
     };
     if (result.available) {
       try {

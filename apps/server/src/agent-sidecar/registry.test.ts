@@ -75,7 +75,9 @@ describe("registry", () => {
 
   test("createAdapterForAgent loads from preset and overrides", () => {
     const adapter = createAdapterForAgent("kimi", {
-      binaryPath: "/custom/path/to/kimi",
+      overrides: {
+        binaryPath: "/custom/path/to/kimi",
+      },
     });
     expect(adapter.agentId).toBe("kimi");
     expect(adapter.protocol).toBe("acp");

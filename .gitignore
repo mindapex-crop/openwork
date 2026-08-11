@@ -77,3 +77,7 @@ evals/results/
 
 # Warden local run logs
 .warden/logs/
+.aider*
+
+# Electron dev runtime artifacts (Cookies/Cache/LocalStorage etc.)
+.openwork-electron-dev/

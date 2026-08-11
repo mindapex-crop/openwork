@@ -30,7 +30,7 @@
  * 添加新 agent 只需在此文件加一行 preset。
  */
 
-import type { AgentSidecarConfig, SidecarCapabilities } from "./types.js";
+import type { AgentSidecarConfig, SidecarCapabilities, SidecarProtocol } from "./types.js";
 
 /** ACP agent 默认能力 */
 const ACP_DEFAULT_CAPS: SidecarCapabilities = {
@@ -44,13 +44,34 @@ const ACP_DEFAULT_CAPS: SidecarCapabilities = {
   documentSync: true,
 };
 
-/** PTY agent 默认能力（保守） */
+/** PTY agent 默认能力 */
 const PTY_DEFAULT_CAPS: SidecarCapabilities = {
   streaming: true,
   permissions: false,
   multiSession: false,
-  modelSwitch: false,
+  modelSwitch: true,
 };
+
+/**
+ * 协议优先级：用户未指定 protocol 时，按此顺序尝试匹配 preset。
+ *   acp (L3 长连接 + 多会话 + 单进程复用)
+ *   > http (L2 服务端长连接)
+ *   > headless-oneshot (PTY headless 一次性短进程，用完自动 exit，无泄漏)
+ *   > pty (L1 伪终端兜底，必须走 process pool)
+ */
+export const DEFAULT_PROTOCOL_PREFERENCE: Array<SidecarProtocol | "headless-oneshot"> = [
+  "acp",
+  "http",
+  "headless-oneshot",
+  "pty",
+];
+
+/** 执行模式：PTY 层如何 spawn 进程 */
+export type PtyExecutionMode =
+  /** 一次性短进程：带 prompt/args spawn，输出结束进程自动 exit，无泄漏。对 headless 友好 */
+  | "headless-oneshot"
+  /** 常驻伪终端：进程一直挂着，通过 stdin 反复写 prompt。需要 process pool 防泄漏 */
+  | "persistent-pty";
 
 /** Agent preset 定义 */
 export interface AgentPreset extends AgentSidecarConfig {
@@ -62,6 +83,23 @@ export interface AgentPreset extends AgentSidecarConfig {
   homepage?: string;
   /** 安装说明 */
   installHint?: string;
+  /**
+   * 协议优先级覆盖（用户 override）。
+   * 为空时使用 DEFAULT_PROTOCOL_PREFERENCE。
+   */
+  preferProtocolOrder?: Array<SidecarProtocol | "headless-oneshot">;
+  /**
+   * 备选协议候选：同一个 binary 支持多种启动方式时，把降级路径都列出来。
+   * 例如 claude-code：[acp(如未来支持), headless-oneshot（-p --stream-json）, pty]
+   * registry.selectPresetForAgent() 按 preferProtocolOrder 从主 preset + altPresets 里挑第一个可匹配的。
+   */
+  altPresets?: Array<Partial<AgentPreset> & Pick<AgentPreset, "protocol">>;
+  /**
+   * PTY 执行模式：
+   *   - 对 cliProfile.headless === true 的，默认 "headless-oneshot"（最安全，用完释放）
+   *   - 其他交互式 PTY 走 "persistent-pty"（必须 process pool 限制并发）
+   */
+  executionMode?: PtyExecutionMode;
 }
 
 /**
@@ -84,6 +122,20 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: ["acp"],
     capabilities: ACP_DEFAULT_CAPS,
     installHint: "npm install -g opencode-ai",
+    // OpenCode 支持 HTTP server / ACP stdio，优先 HTTP (server 单例 + 多会话)，次选 ACP stdio
+    preferProtocolOrder: ["http", "acp", "headless-oneshot", "pty"],
+    altPresets: [
+      {
+        protocol: "http",
+        binary: "opencode",
+        args: ["serve", "--cors", "*", "--hostname", "127.0.0.1"],
+        capabilities: {
+          ...ACP_DEFAULT_CAPS,
+          costTracking: true,
+          worktree: true,
+        },
+      },
+    ],
   },
 
   kimi: {
@@ -100,6 +152,14 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
       headless: false,
     },
     installHint: "curl -fsSL https://kimi.com/code/install.sh | bash",
+    // 优先 ACP；同时提供 PTY headless 一次性降级
+    preferProtocolOrder: ["acp", "headless-oneshot", "pty"],
+    altPresets: [
+      {
+        protocol: "pty",
+        executionMode: "persistent-pty",
+      },
+    ],
   },
 
   traecli: {
@@ -112,6 +172,7 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: ["acp", "serve"],
     capabilities: ACP_DEFAULT_CAPS,
     installHint: "下载 Trae CLI: https://docs.trae.cn/cli",
+    preferProtocolOrder: ["acp", "headless-oneshot", "pty"],
   },
 
   goose: {
@@ -124,6 +185,14 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: ["acp"],
     capabilities: ACP_DEFAULT_CAPS,
     installHint: "curl -fsSL https://github.com/block/goose/releases/latest/download/goose-installer.sh | bash",
+    preferProtocolOrder: ["acp", "headless-oneshot", "pty"],
+    altPresets: [
+      {
+        protocol: "pty",
+        executionMode: "persistent-pty",
+        args: [],
+      },
+    ],
   },
 
   openclaw: {
@@ -135,7 +204,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "openclaw",
     args: ["acp"],
     capabilities: ACP_DEFAULT_CAPS,
-    installHint: "npm install -g openclaw",
+    installHint: "openclaw 是 pnpm workspace 项目，npm install -g 会缺 dist/entry.mjs。请用: git clone https://github.com/openclaw/openclaw && pnpm install && pnpm build && pnpm start",
+    disabled: true,
   },
 
   hermes: {
@@ -145,9 +215,14 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     homepage: "https://hermes-agent.nousresearch.com",
     protocol: "acp",
     binary: "hermes",
-    args: ["acp"],
+    args: ["acp", "--accept-hooks", "--yes"],
     capabilities: ACP_DEFAULT_CAPS,
+    env: { TERM: "dumb" },
+    startupTimeoutMs: 15000,
     installHint: "pip install hermes-agent",
+    preferProtocolOrder: ["acp", "headless-oneshot", "pty"],
+    executionMode: "persistent-pty",
+    cliProfile: { headless: false },
   },
 
   pi: {
@@ -215,6 +290,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "codex",
     args: ["acp"],
     capabilities: ACP_DEFAULT_CAPS,
+    installHint: "codex acp 要求 TTY（拒绝 pipe stdio）。请改用 agentId=codex，会自动切到 codex exec-server HTTP 长连接或 codex exec headless 模式。",
+    disabled: true,
   },
 
   "continue-acp": {
@@ -294,7 +371,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
       multiSession: true,
       modelSwitch: true,
     },
-    installHint: "curl -sSL https://tabby.tabbyml.com/install.sh | bash",
+    installHint: "Tabby 的 CLI 是 shell 包装脚本，需通过 Docker 启动: docker run --gpus all -p 8080:8080 tabbyml/tabby serve --device metal",
+    disabled: true,
   },
 
   letta: {
@@ -349,6 +427,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
       outputFormats: ["stream-json", "json"],
     },
     installHint: "npm install -g @anthropic-ai/claude-code",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
   },
 
   codex: {
@@ -360,11 +440,14 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "codex",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    env: { TERM: "xterm-256color" },
     cliProfile: {
       headless: true,
       headlessArgs: ["exec", "--json"],
       outputFormats: ["json"],
     },
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
   },
 
   "cursor-agent": {
@@ -380,6 +463,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
       // headless -p 官方文档未稳定验证，暂按交互式兜底（L1 PTY）
       headless: false,
     },
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "persistent-pty",
   },
 
   gemini: {
@@ -396,6 +481,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
       headlessArgs: ["-p", "--output-format", "stream-json"],
       outputFormats: ["stream-json", "json"],
     },
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
   },
 
   copilot: {
@@ -429,6 +516,11 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "cline",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    installHint: "npm install -g cline（需 darwin-arm64 二进制，Rosetta x86_64 环境会缺 @cline/cli-darwin-x64）",
+    cliProfile: { headless: false },
+    executionMode: "persistent-pty",
+    preferProtocolOrder: ["pty"],
+    disabled: true,
   },
 
   codebuff: {
@@ -456,6 +548,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
       headless: false,
     },
     installHint: "npm install -g freebuff",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "persistent-pty", // 必须进 process pool，防爆进程
   },
 
   continue: {
@@ -467,6 +561,28 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "continue",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    // Continue 同时有 HTTP server 版和 ACP 版，优先用 server（单例长连接，无进程反复创建）
+    preferProtocolOrder: ["http", "acp", "pty"],
+    executionMode: "persistent-pty",
+    altPresets: [
+      {
+        protocol: "http",
+        binary: "continue",
+        args: ["server"],
+        capabilities: {
+          streaming: true,
+          multiSession: true,
+          modelSwitch: true,
+          mcpClient: true,
+        },
+      },
+      {
+        protocol: "acp",
+        binary: "continue",
+        args: ["acp"],
+        capabilities: ACP_DEFAULT_CAPS,
+      },
+    ],
   },
 
   droid: {
@@ -516,6 +632,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
       headlessArgs: ["-p"],
       outputFormats: ["ansi"],
     },
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
   },
 
   "rovo-dev": {
@@ -527,6 +645,7 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "rovo-dev",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    executionMode: "persistent-pty",
   },
 
   auggie: {
@@ -538,6 +657,7 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "auggie",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    executionMode: "persistent-pty",
   },
 
   "command-code": {
@@ -549,6 +669,7 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "command-code",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    executionMode: "persistent-pty",
   },
 
   autohand: {
@@ -560,6 +681,7 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "autohand",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    executionMode: "persistent-pty",
   },
 
   crush: {
@@ -571,6 +693,7 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "crush",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    executionMode: "persistent-pty",
   },
 
   mimo: {
@@ -582,6 +705,16 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "mimo",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    preferProtocolOrder: ["acp", "headless-oneshot", "pty"],
+    executionMode: "persistent-pty",
+    altPresets: [
+      {
+        protocol: "acp",
+        binary: "mimo",
+        args: ["acp"],
+        capabilities: ACP_DEFAULT_CAPS,
+      },
+    ],
   },
 
   devin: {
@@ -593,6 +726,7 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     binary: "devin",
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
+    executionMode: "persistent-pty",
   },
 
   // --- AI Pair Programming CLIs (PTY) ---
@@ -607,6 +741,14 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: [],
     capabilities: { ...PTY_DEFAULT_CAPS, permissions: true, multiSession: false },
     installHint: "pip install aider-chat",
+    // Aider 支持 --architect --yes 等批处理参数，优先 headless 一次性
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
+    cliProfile: {
+      headless: true,
+      headlessArgs: ["--yes", "--no-suggest-shell-commands"],
+      outputFormats: ["ansi"],
+    },
   },
 
   plandex: {
@@ -691,6 +833,28 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: [],
     capabilities: { ...PTY_DEFAULT_CAPS, permissions: true, multiSession: true },
     installHint: "pip install openhands-ai",
+    // 优先 ACP（SWE 代理的多会话复用）；其次 HTTP server；最后 PTY
+    preferProtocolOrder: ["acp", "http", "pty"],
+    executionMode: "persistent-pty",
+    altPresets: [
+      {
+        protocol: "acp",
+        binary: "openhands",
+        args: ["acp"],
+        capabilities: { ...ACP_DEFAULT_CAPS, permissions: true, multiSession: true },
+      },
+      {
+        protocol: "http",
+        binary: "openhands",
+        args: ["serve", "--host", "127.0.0.1"],
+        capabilities: {
+          streaming: true,
+          multiSession: true,
+          permissions: true,
+          modelSwitch: true,
+        },
+      },
+    ],
   },
 
   chatdev: {
@@ -703,6 +867,9 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
     installHint: "pip install chatdev",
+    // ChatDev 单次任务型，headless 一次性跑完就退出
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
   },
 
   "swe-agent": {
@@ -715,6 +882,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: ["run"],
     capabilities: PTY_DEFAULT_CAPS,
     installHint: "pip install sweagent",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
   },
 
   "auto-code-rover": {
@@ -727,6 +896,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
     installHint: "pip install auto-code-rover",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
   },
 
   // --- LLM 官方 CLI 工具 ---
@@ -779,6 +950,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
     installHint: "Download from https://tongyi.aliyun.com/lingma",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "persistent-pty", // 交互式为主，强制进池
   },
 
   "baidu-comate": {
@@ -791,6 +964,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
     installHint: "Download from https://comate.baidu.com",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "persistent-pty",
   },
 
   "tencent-codebuddy": {
@@ -803,6 +978,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
     installHint: "Download from https://copilot.tencent.com",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "persistent-pty",
   },
 
   codegeex: {
@@ -815,9 +992,11 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: ["chat"],
     capabilities: PTY_DEFAULT_CAPS,
     installHint: "pip install codegeex",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "persistent-pty",
   },
 
-  // --- Code Review Agents ---
+  // --- Code Review Agents（一般单命令式输出，headless 一次性） ---
 
   "pr-agent": {
     agentId: "pr-agent",
@@ -829,6 +1008,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
     installHint: "pip install pr-agent",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
   },
 
   "open-code-review": {
@@ -841,6 +1022,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
     installHint: "npm install -g @alibaba-group/open-code-review",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
   },
 
   "cr-gpt": {
@@ -853,6 +1036,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: [],
     capabilities: PTY_DEFAULT_CAPS,
     installHint: "npm install -g cr-gpt",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
   },
 
   autodev: {
@@ -865,6 +1050,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: ["review"],
     capabilities: PTY_DEFAULT_CAPS,
     installHint: "npm install -g @autodev/cli",
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
   },
 
   // --- 仓库 / 代码搜索 ---
@@ -980,3 +1167,93 @@ export function getPreset(agentId: string): AgentPreset {
 export function listPresets(): Array<AgentPreset & { id: string }> {
   return Object.entries(AGENT_PRESETS).map(([id, preset]) => ({ id, ...preset }));
 }
+
+/** 给定候选（主 preset + altPresets），找到 protocol 匹配的候选并 merge 成完整 preset */
+function findCandidateByProtocol(
+  base: AgentPreset,
+  wantProtocol: SidecarProtocol,
+  wantExecutionMode: PtyExecutionMode | undefined,
+): AgentPreset | null {
+  // 主 preset 命中
+  if (base.protocol === wantProtocol && executionModeMatches(base, wantExecutionMode)) {
+    return base;
+  }
+  // altPresets 中顺序匹配
+  if (base.altPresets) {
+    for (const alt of base.altPresets) {
+      if (alt.protocol === wantProtocol) {
+        const merged: AgentPreset = {
+          ...base,
+          ...alt,
+          // capabilities 浅 merge 避免丢失 preset 里声明的能力
+          capabilities: { ...(base.capabilities ?? {}), ...(alt.capabilities ?? {}) },
+          // protocol 必须用 alt 覆盖
+          protocol: alt.protocol,
+        };
+        if (executionModeMatches(merged, wantExecutionMode)) return merged;
+      }
+    }
+  }
+  return null;
+}
+
+function executionModeMatches(preset: AgentPreset, want: PtyExecutionMode | undefined): boolean {
+  if (preset.protocol !== "pty") return true; // 非 PTY 不区分
+  if (!want) return true;
+  const resolved = resolveExecutionMode(preset);
+  return resolved === want;
+}
+
+/**
+ * 根据 preferProtocolOrder（或默认）选择"最高优先级且能解析"的 preset。
+ * 本函数只做配置优选，不做 detect（detect 在 adapter 层按需执行）。
+ *
+ * 当 protocol/executionMode 用户强制指定时（非 undefined），以此为准；否则
+ * 按 preferProtocolOrder 顺序尝试：acp → http → headless-oneshot → pty。
+ */
+export function selectPresetForAgent(
+  agentId: string,
+  overrides?: {
+    protocol?: SidecarProtocol;
+    executionMode?: PtyExecutionMode;
+    preferProtocolOrder?: Array<SidecarProtocol | "headless-oneshot">;
+  },
+): AgentPreset {
+  const base = getPreset(agentId);
+
+  // 用户显式指定了 protocol → 直接匹配，找不到就抛错
+  if (overrides?.protocol) {
+    const hit = findCandidateByProtocol(base, overrides.protocol, overrides.executionMode);
+    if (hit) return hit;
+    // 找不到就 fallback 到 base（保证 createAdapterForAgent 不报错；detect 会按实际 binary 校验）
+    return base;
+  }
+
+  const order = overrides?.preferProtocolOrder ?? base.preferProtocolOrder ?? DEFAULT_PROTOCOL_PREFERENCE;
+  for (const choice of order) {
+    if (choice === "headless-oneshot") {
+      const hit = findCandidateByProtocol(base, "pty", "headless-oneshot");
+      if (hit) return hit;
+      continue;
+    }
+    const hit = findCandidateByProtocol(base, choice, overrides?.executionMode);
+    if (hit) return hit;
+  }
+  return base;
+}
+
+/**
+ * 解析 PTY 执行模式：
+ *   - 优先 preset.executionMode 显式声明
+ *   - 否则看 cliProfile.headless：true → headless-oneshot；false/undefined → persistent-pty
+ */
+export function resolveExecutionMode(preset: AgentPreset): PtyExecutionMode {
+  if (preset.protocol !== "pty") {
+    // 非 PTY 不关心；返回 persistent-pty 作为占位（不应被消费方使用）
+    return "persistent-pty";
+  }
+  if (preset.executionMode) return preset.executionMode;
+  if (preset.cliProfile?.headless) return "headless-oneshot";
+  return "persistent-pty";
+}
+

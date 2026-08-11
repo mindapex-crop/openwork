@@ -21,10 +21,11 @@ import { GenericSidecarAdapter } from "./adapters/generic.js";
 import { McpSidecarAdapter } from "./adapters/mcp.js";
 import { OpenCodeSidecarAdapter } from "./adapters/opencode.js";
 import { PtySidecarAdapter } from "./adapters/pty.js";
-import { DEFAULT_AGENT_ID, getPreset, listPresets } from "./presets.js";
+import { DEFAULT_AGENT_ID, getPreset, listPresets, selectPresetForAgent, resolveExecutionMode } from "./presets.js";
 import { registerAdapter, unregisterAdapter, listRegisteredProtocols, createAdapter, createAdapterForAgent } from "./registry.js";
 import type { AgentSidecarAdapter, AgentSidecarConfig, SidecarProtocol } from "./types.js";
 import { detectAgent, detectAllAgents, listAvailableAgents, resolveCleanPath, findBinaryInPath, getAgentVersion, getBinaryDir } from "./detect.js";
+import { SidecarProcessPool } from "./sidecar-pool.js";
 
 // ============================================================
 // 内置 adapter 自动注册（借鉴 cc-connect init() pattern）
@@ -80,7 +81,11 @@ export {
   DEFAULT_AGENT_ID,
   getPreset,
   listPresets,
+  selectPresetForAgent,
+  resolveExecutionMode,
   type AgentPreset,
+  type PtyExecutionMode,
+  DEFAULT_PROTOCOL_PREFERENCE,
 } from "./presets.js";
 
 export {
@@ -89,6 +94,7 @@ export {
   listRegisteredProtocols,
   createAdapter,
   createAdapterForAgent,
+  type CreateAdapterForAgentOptions,
 } from "./registry.js";
 
 export {
@@ -100,6 +106,16 @@ export {
   getAgentVersion,
   getBinaryDir,
 } from "./detect.js";
+
+export {
+  SidecarProcessPool,
+  getGlobalSidecarPool,
+  resetGlobalSidecarPool,
+  DEFAULT_POOL_CONFIG,
+  type SidecarPoolConfig,
+  type SidecarPoolMetrics,
+  type PooledSidecarHandle,
+} from "./sidecar-pool.js";
 
 export { AcpSidecarAdapter } from "./adapters/acp.js";
 export { OpenCodeSidecarAdapter } from "./adapters/opencode.js";

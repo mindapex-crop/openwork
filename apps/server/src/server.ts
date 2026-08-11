@@ -66,9 +66,9 @@ import { addRoute, matchRoute, type AuthMode, type RequestContext, type Route } 
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { registerWorkspaceRoutes } from "./routes/workspaces.js";
 import { registerAgentRuntimeRoutes } from "./routes/agent-runtimes.js";
+import { RuntimeRegistry } from "./runtime-registry.js";
 import { registerWorktreeRoutes } from "./routes/worktrees.js";
 import { registerChatRoutes } from "./routes/chat.js";
-import { RuntimeRegistry } from "./runtime-registry.js";
 import { WorktreeService } from "./worktree/worktree-service.js";
 import { ChatRelayService } from "./chat/chat-relay.js";
 import { InMemoryChatChannel } from "./chat/channels/in-memory.js";
@@ -849,6 +849,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   const tokens = new TokenService(config);
   const env = new EnvService();
   const logger = createServerLogger(config);
+  const runtimeRegistry = new RuntimeRegistry();
   let watcherHandle = startReloadWatchers({ config, reloadEvents, logger });
   const refreshWorkspaceReloadBaseline = (workspaceId: string, reasons?: ReloadReason[]) =>
     watcherHandle.refreshWorkspace(workspaceId, reasons);
@@ -863,6 +864,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     approvals,
     tokens,
     env,
+    runtimeRegistry,
     restartReloadWatchers,
     engineMcpServerState,
     logger,
@@ -957,6 +959,11 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
           const actor = await requireClient(request, config, tokens);
           assertOpencodeProxyAllowed(actor, request.method, url.pathname);
           proxyService = "opencode";
+          // 注入 CLI preset agent 到 agent 列表（UI 的 agent 切换入口）
+          if (request.method === "GET" && url.pathname.endsWith("/opencode/agent")) {
+            const response = await enrichOpencodeAgentList({ config, request, url, workspace: config.workspaces[0], registry: runtimeRegistry });
+            return finalize(response);
+          }
           const response = await proxyOpencodeRequest({ config, request, url, workspace: config.workspaces[0] });
           return finalize(response);
         } catch (error) {
@@ -1174,6 +1181,52 @@ async function proxyOpencodeRequest(input: {
   });
 
   return sanitizeProxyResponse(response);
+}
+
+/**
+ * 拦截 opencode 的 agent 列表响应，把本机 PATH 上的 CLI preset agent 注入进来，
+ * 让 UI 的 agent 切换下拉框（command-palette / composer）能看到所有可用的 CLI agent。
+ *
+ * 保持 opencode 原始 agent（如 openwork、project agents）不动，新增的 CLI agent 以
+ * `mode: "builtin"`, `hidden: false` 形式追加到列表末尾。
+ */
+async function enrichOpencodeAgentList(input: {
+  config: ServerConfig;
+  request: Request;
+  url: URL;
+  workspace: WorkspaceInfo;
+  registry: RuntimeRegistry;
+}) {
+  const { config, request, url, workspace, registry } = input;
+  const response = await proxyOpencodeRequest({ config, request, url, workspace });
+  if (!response.ok) return response;
+
+  try {
+    const upstream = await response.json();
+    if (!Array.isArray(upstream)) return jsonResponse(upstream);
+
+    const upstreamNames = new Set(upstream.map((a: { name?: string }) => a?.name).filter(Boolean));
+    const detected = await registry.list();
+    const injected = detected
+      .filter((cap) => cap.available && !upstreamNames.has(cap.agentId))
+      .map((cap) => ({
+        name: cap.agentId,
+        label: cap.label ?? cap.agentId,
+        mode: "builtin",
+        hidden: false,
+        source: "openwork",
+        capabilities: cap.capabilities,
+        executionMode: cap.executionMode,
+        protocol: cap.protocol,
+        vendor: cap.vendor,
+        homepage: cap.homepage,
+        installHint: cap.installHint,
+      }));
+
+    return jsonResponse([...upstream, ...injected]);
+  } catch {
+    return response;
+  }
 }
 
 /**
@@ -1532,10 +1585,12 @@ function createRoutes(
   approvals: ApprovalService,
   tokens: TokenService,
   env: EnvService,
+  runtimeRegistry: RuntimeRegistry,
   onWorkspacesChanged: () => void,
   engineMcpServerState: EngineMcpServerState,
   logger: ServerLogger,
 ): Route[] {
+  void runtimeRegistry;
   const routes: Route[] = [];
   registerCoreRoutes({
     routes,
@@ -1580,7 +1635,6 @@ function createRoutes(
   // ============================================================
   // team-autonomy 扩展路由（openspec-runtime-reporting / worktree / chat-bridge）
   // ============================================================
-  const runtimeRegistry = new RuntimeRegistry();
   const worktreeService = new WorktreeService();
   const chatChannels: Record<string, import("./chat/types.js").ChatChannelAdapter> = {
     "in-memory": new InMemoryChatChannel(),

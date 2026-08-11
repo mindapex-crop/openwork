@@ -126,7 +126,9 @@ export async function startEmbeddedServer(options: EmbeddedServerOptions): Promi
         // 非 HTTP agent (ACP/PTY/MCP/Generic)：通过 agent-sidecar 抽象层启动
         // ============================================================
         agentSidecarAdapter = createAdapterForAgent(requestedAgentId, {
-          binaryPath: options.opencodeBin || process.env.OPENWORK_OPENCODE_BIN || undefined,
+          overrides: {
+            binaryPath: options.opencodeBin || process.env.OPENWORK_OPENCODE_BIN || undefined,
+          },
         });
 
         // 启动前先做 detect，给用户清晰的错误信息

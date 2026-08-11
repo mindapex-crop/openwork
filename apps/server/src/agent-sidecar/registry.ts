@@ -12,7 +12,8 @@
  */
 
 import type { AgentSidecarAdapter, AgentSidecarConfig, AdapterFactory, SidecarProtocol } from "./types.js";
-import { getPreset } from "./presets.js";
+import { resolveExecutionMode, selectPresetForAgent, type AgentPreset, type PtyExecutionMode } from "./presets.js";
+import type { PtySidecarAdapter } from "./adapters/pty.js";
 
 const registry = new Map<SidecarProtocol, AdapterFactory>();
 
@@ -53,12 +54,37 @@ export function createAdapter(config: AgentSidecarConfig): AgentSidecarAdapter {
   return factory(config);
 }
 
+export interface CreateAdapterForAgentOptions {
+  /** 用户显式强制 protocol */
+  protocol?: SidecarProtocol;
+  /** 用户显式强制 PTY 执行模式 */
+  executionMode?: PtyExecutionMode;
+  /** 用户覆盖协议优先级顺序 */
+  preferProtocolOrder?: Array<SidecarProtocol | "headless-oneshot">;
+  /** 额外的 AgentSidecarConfig 覆盖（env/args/binaryPath/timeout/cwd 等） */
+  overrides?: Partial<AgentSidecarConfig>;
+}
+
 /**
- * 工厂函数：根据 agentId 创建 adapter（自动从 preset 加载配置）
+ * 工厂函数：根据 agentId 创建 adapter（自动从 preset 加载 + 协议优选）
+ *
+ * 【长连接优先策略】：
+ *   优先走 preset.preferProtocolOrder / 默认：acp > http > headless-oneshot > pty
+ *   - ACP/HTTP：单进程复用 + 多会话 → 进入 SidecarProcessPool 做 idle 缓存 + 配额
+ *   - headless-oneshot：PTY 一次性短进程（用完 exit，0 泄漏）
+ *   - pty (persistent)：最后兜底，强制进入进程池（默认上限 3），防爆炸
  */
-export function createAdapterForAgent(agentId: string, overrides?: Partial<AgentSidecarConfig>): AgentSidecarAdapter {
-  const preset = getPreset(agentId);
-  const config: AgentSidecarConfig = {
+export function createAdapterForAgent(
+  agentId: string,
+  options: CreateAdapterForAgentOptions = {},
+): AgentSidecarAdapter & { selectedPreset: AgentPreset; resolvedExecutionMode: PtyExecutionMode } {
+  const preset = selectPresetForAgent(agentId, {
+    protocol: options.protocol,
+    executionMode: options.executionMode,
+    preferProtocolOrder: options.preferProtocolOrder,
+  });
+  const resolvedExecutionMode = resolveExecutionMode(preset);
+  const config: AgentSidecarConfig & { cliProfile?: AgentSidecarConfig["cliProfile"] } = {
     agentId: preset.agentId,
     protocol: preset.protocol,
     binary: preset.binary,
@@ -74,7 +100,19 @@ export function createAdapterForAgent(agentId: string, overrides?: Partial<Agent
     outputPattern: preset.outputPattern,
     displayName: preset.label,
     disabled: preset.disabled,
-    ...overrides,
+    cliProfile: preset.cliProfile,
+    ...options.overrides,
   };
-  return createAdapter(config);
+  const adapter = createAdapter(config) as AgentSidecarAdapter & {
+    selectedPreset: AgentPreset;
+    resolvedExecutionMode: PtyExecutionMode;
+    executionMode?: PtyExecutionMode;
+  };
+  adapter.selectedPreset = preset;
+  adapter.resolvedExecutionMode = resolvedExecutionMode;
+  if (preset.protocol === "pty") {
+    (adapter as unknown as PtySidecarAdapter).executionMode = resolvedExecutionMode;
+  }
+  return adapter;
 }
+
