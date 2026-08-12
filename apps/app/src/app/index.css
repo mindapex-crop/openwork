@@ -170,15 +170,131 @@
   --dls-card-shadow: 0 14px 36px rgba(0, 0, 0, 0.24);
 }
 
-html,
-body {
+html, body, #root {
   height: 100%;
-  overflow: hidden;
+}
+
+/* =============================================================
+ * Codex Design System — OpenWork 全局主题
+ * 参考 Codex Desktop 真实设计语言：
+ * - sidebar: 深灰 bg #2F2F2F，白色标题栏，accent orange #FF8A00
+ * - main: 白底 #FFFFFF，圆角 12px，垂直居中
+ * - sessions: 白底 #FFFFFF，灰色分隔线 #EAEAEA，文字 #1A1A1A
+ * - inputs: 浅灰 #F4F4F4，圆角 24px，accent orange
+ * - green accent: #22C55E
+ * ============================================================= */
+
+/* --- 主背景色 --- */
+:root {
+  /* surface 主背景（主内容区）→ 纯白 */
+  --dls-surface: #FFFFFF;
+  --dls-surface-rgb: 255, 255, 255;
+
+  /* 应用主背景 → 纯白（codex main area） */
+  --dls-background: #FFFFFF;
+  --dls-background-rgb: 255, 255, 255;
+
+  /* 画布色 → 纯白 */
+  --dls-canvas: #FFFFFF;
+  --dls-canvas-rgb: 255, 255, 255;
+
+  /* 边框：浅灰 */
+  --dls-border: #EAEAEA;
+  --dls-border-rgb: 234, 234, 234;
+
+  /* hover 色：浅灰 */
+  --dls-hover: #F4F4F4;
+  --dls-hover-rgb: 244, 244, 244;
+
+  /* 主文字：深黑 */
+  --dls-text: #1A1A1A;
+  --dls-text-rgb: 26, 26, 26;
+
+  /* 次要文字：中灰 */
+  --dls-secondary: #6E6E6E;
+  --dls-secondary-rgb: 110, 110, 110;
+
+  /* Codex 品牌 accent: orange */
+  --dls-accent: #FF8A00;
+  --dls-accent-rgb: 255, 138, 0;
+  --dls-accent-hover: #E67700;
+  --dls-accent-fg: #FFFFFF;
+
+  /* 绿色 accent */
+  --dls-green: #22C55E;
+  --dls-green-rgb: 34, 197, 94;
+
+  /* 圆角统一 12px */
+  --dls-radius: 12px;
+
+  /* 阴影（codex 极简，几乎无阴影） */
+  --dls-card-shadow: none;
+  --dls-shell-shadow: none;
+}
+
+/* --- 侧栏深灰主题（Codex sidebar） --- */
+[data-sidebar],
+aside,
+aside[data-sidebar] {
+  --dls-sidebar-bg: #2F2F2F !important;
+  --dls-sidebar-text: #FFFFFF !important;
+  --dls-sidebar-accent: #FF8A00 !important;
+  --dls-sidebar-hover: #3D3D3D !important;
+  --dls-sidebar-border: #3D3D3D !important;
+}
+
+[data-sidebar] {
+  background: #2F2F2F !important;
+  color: #FFFFFF !important;
+}
+
+/* --- Sessions 页头 --- */
+[data-session-header],
+header[data-session-header] {
+  background: #FFFFFF !important;
+  border-bottom: 1px solid #EAEAEA !important;
+}
+
+/* --- Sessions 内容区（白底圆角） --- */
+[data-sessions],
+div[data-sessions] {
+  background: #FFFFFF !important;
+  border-radius: 12px !important;
+  padding: 32px !important;
+}
+
+/* --- Cards 风格 --- */
+[data-card] {
+  background: #FFFFFF;
+  border: 1px solid #EAEAEA;
+  border-radius: 12px;
+}
+
+/* --- Inputs 浅灰圆角 --- */
+input, textarea, [role="textbox"] {
+  border-radius: 24px !important;
+  background: #F4F4F4 !important;
+  border-color: #F4F4F4 !important;
+}
+
+/* --- 消息气泡：codex 极简，无背景，灰色分隔线 --- */
+[data-message-bubble],
+[data-role="assistant"] {
+  background: transparent !important;
+  border-left: 2px solid #EAEAEA;
+  border-radius: 0 !important;
+  padding: 0 0 0 12px !important;
+}
+
+/* --- Body 全局白底 --- */
+body {
+  background: #FFFFFF !important;
+  color: #1A1A1A !important;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
 }
 
 #root {
-  height: 100%;
-  overflow: hidden;
+  background: #FFFFFF !important;
 }
 
 html {
