@@ -110,6 +110,27 @@
 | 模型选择器 accent | 橙色 | "Big Pickle" 带箭头 | ✅ |
 | 侧栏底部 Sync | 浅色文字 | "Sync with OpenWork Cloud" | ✅ |
 
+### 截图说明（test-main-codex.png）
+```
+┌────────────┬─────────────────────────────────────────────────────┐
+│ 搜索会话     │ 新建会话                                          │
+│ 扩展        │                                                  │
+│ 空间        │  What do you need done?                          │
+│ 管理        │  Describe it in plain language                   │
+│            │                                                  │
+│ WORKSPACES │  ┌────────────────────────────────────────────┐ │
+│  tra_...   │  │ 今天帮你做些什么？@引用文件，/调用技能与指令 │ │
+│ 今天       │  └────────────────────────────────────────────┘ │
+│ 新建会话   │                                                  │
+│ 昨天       │  Summarize my week | Clean up a spreadsheet      │
+│ 新建会话   │  Draft a document | Automate a web task         │
+└────────────┴─────────────────────────────────────────────────────┘
+```
+- 左侧栏：深灰 `#2F2F2F` + 白色文字 ✅
+- 主内容区：纯白 `#FFFFFF` ✅
+- 中文标签：搜索会话/扩展/空间/管理 ✅
+- 占位符中文：✅
+
 ### 残留英文（后续待中文化）
 - 主标题 "What do you need done?" → 需 zh locale
 - 副标题 "Describe it in plain language" → 需 zh locale  
