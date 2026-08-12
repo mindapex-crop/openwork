@@ -46,6 +46,8 @@ export function SsoScreen() {
   const [jwksEndpoint, setJwksEndpoint] = useState("");
   const [userInfoEndpoint, setUserInfoEndpoint] = useState("");
   const [tokenEndpointAuthentication, setTokenEndpointAuthentication] = useState<"" | "client_secret_basic" | "client_secret_post">("");
+  const [providerName, setProviderName] = useState("");
+  const [customLoginPage, setCustomLoginPage] = useState("");
 
   const access = useMemo(
     () => getOrgAccessFlags(orgContext?.currentMember.role ?? "member", orgContext?.currentMember.isOwner ?? false, orgContext?.roles),
@@ -174,6 +176,8 @@ export function SsoScreen() {
                 entryPoint,
                 cert,
                 audience: audience || undefined,
+                providerName: providerName || undefined,
+                customLoginPage: customLoginPage || undefined,
               }
             : {
                 issuer,
@@ -187,6 +191,8 @@ export function SsoScreen() {
                 jwksEndpoint: jwksEndpoint || undefined,
                 userInfoEndpoint: userInfoEndpoint || undefined,
                 tokenEndpointAuthentication: tokenEndpointAuthentication || undefined,
+                providerName: providerName || undefined,
+                customLoginPage: customLoginPage || undefined,
               };
 
           const { response, payload } = await requestJson(path, { method: "POST", headers: getOrgScopedHeaders(), body: JSON.stringify(body) }, 20000);

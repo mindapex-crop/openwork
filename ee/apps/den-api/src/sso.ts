@@ -281,7 +281,7 @@ export async function deleteOrganizationSsoConnection(organizationId: Organizati
 }
 
 export async function registerOrganizationSsoConnection(input: OrganizationSsoRegistrationInput) {
-  const providerId = buildOrganizationSsoProviderId(input.organizationId)
+  const providerId = buildOrganizationSsoProviderId(input.organizationId, input.providerName)
   const existing = await getOrganizationSsoConnection(input.organizationId)
   const domainVerified = isDevLoopbackIssuer(input.issuer) || isMicrosoftEntraManagedDomain({
     domain: input.domain,

@@ -45,6 +45,8 @@ const forbiddenSchema = z.object({
 const baseRegistrationSchema = z.object({
   issuer: z.string().url(),
   domain: z.string().min(1),
+  providerName: z.string().min(1).optional().default("default"),
+  customLoginPage: z.string().url().nullable().optional(),
 })
 
 const samlRegistrationSchema = baseRegistrationSchema.extend({
@@ -85,6 +87,7 @@ const samlConnectionConfigSchema = z.object({
 const ssoConnectionSchema = z.object({
   id: z.string(),
   providerId: z.string(),
+  providerName: z.string().optional(),
   kind: z.enum(["oidc", "saml"]),
   issuer: z.string().url(),
   domain: z.string(),
@@ -172,6 +175,7 @@ function serializeConnection(input: {
   return {
     id: connection.id,
     providerId: connection.providerId,
+    providerName: connection.providerName || "default",
     kind: connection.kind === "saml" ? "saml" : "oidc",
     issuer: connection.issuer,
     domain: connection.domain,
