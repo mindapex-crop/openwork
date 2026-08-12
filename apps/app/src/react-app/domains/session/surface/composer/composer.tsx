@@ -1501,7 +1501,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                             ["commands", t("dashboard.commands")],
                             ["skills", t("dashboard.skills")],
                             ["mcps", t("composer.mcps_label")],
-                            ["extensions", "Extensions"],
+                            ["extensions", t("composer.extensions_label")],
                           ] as const).map(([section, label]) => (
                             <button
                               key={section}
@@ -1742,7 +1742,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                                 <div className="px-3 py-2 text-xs text-gray-10">
                                   {!mcpLoaded && mcpLoading
                                     ? t("composer.loading_commands")
-                                    : (mcpStatus ?? "No extensions enabled. Open Extensions to enable them.")}
+                                    : (mcpStatus ?? t("composer.extensions_unavailable"))}
                                 </div>
                               ) : null}
                             </>
@@ -1770,11 +1770,11 @@ export function ReactSessionComposer(props: ComposerProps) {
                                 ))}
                               </div>
                             ) : (
-                              <div className="px-3 py-2 text-xs text-gray-10">No plugin files imported yet.</div>
+                              <div className="px-3 py-2 text-xs text-gray-10">{t("composer.no_plugins")}</div>
                             )
                           ) : toolMenuSection.startsWith("plugin:") ? (
                             <div className="px-3 py-2 text-xs text-gray-10">
-                              {!pluginsLoaded && pluginsLoading ? t("composer.loading_commands") : "Plugin files are unavailable."}
+                              {!pluginsLoaded && pluginsLoading ? t("composer.loading_commands") : t("composer.plugins_unavailable")}
                             </div>
                           ) : null}
                         </div>

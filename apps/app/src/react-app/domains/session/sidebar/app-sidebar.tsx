@@ -898,13 +898,13 @@ function threadDateBucketKey(timestamp: number | null | undefined): ThreadDateBu
 function threadDateBucketLabel(bucket: ThreadDateBucketKey) {
   switch (bucket) {
     case "today":
-      return "Today";
+      return t("session.today");
     case "yesterday":
-      return "Yesterday";
+      return t("session.yesterday");
     case "last7":
-      return "Previous 7 Days";
+      return t("session.previous_7_days");
     case "older":
-      return "Older";
+      return t("session.older");
   }
 }
 
@@ -1176,7 +1176,7 @@ export function AppSidebar(props: AppSidebarProps) {
               <SidebarDestination
                 active={false}
                 icon={Boxes}
-                label="Spaces"
+                label={t("workspace_list.spaces")}
                 onSelect={props.onOpenSpaces}
               />
             ) : null}
@@ -1184,7 +1184,7 @@ export function AppSidebar(props: AppSidebarProps) {
               <SidebarDestination
                 active={false}
                 icon={LayoutDashboard}
-                label="Admin"
+                label={t("workspace_list.admin")}
                 onSelect={props.onOpenAdmin}
               />
             ) : null}
