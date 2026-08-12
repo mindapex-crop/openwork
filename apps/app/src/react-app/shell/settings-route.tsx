@@ -1019,6 +1019,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     client: opencodeClient,
     baseUrl: opencodeBaseUrl,
     workspaceRoot: selectedWorkspaceRoot,
+    openworkServerClient: selectedWorkspaceEndpoint?.client ?? openworkClient,
     onOpen: handleModelPickerOpen,
     onLoadError: handleModelPickerLoadError,
   });

@@ -18,6 +18,7 @@ import { spawn } from "node:child_process";
 import { BaseSidecarAdapter } from "../adapters/base.js";
 import { PtySidecarAdapter } from "../adapters/pty.js";
 import { resolveCleanPath, findBinaryInPath, getAgentVersion } from "../detect.js";
+import { restoreRealHomeEnv } from "../home-env.js";
 import { bindStreamToParser, createOutputParser, mapJsonlToEvent } from "../output-parser.js";
 import type {
   AgentEvent,
@@ -59,21 +60,42 @@ function smokeTest(binaryPath: string, args: string[], env?: Record<string, stri
   return new Promise((resolve) => {
     const child = spawn(binaryPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...env },
-      // 冒烟超时 3s（原 8s）：真实 LLM CLI 有 key 时冒烟 <1s 完成；无 key 时快速判负，
-      // 避免 RuntimeRegistry 全量探测被串成分钟级（每个 agent 最多 2 个候选 × 8s）。
-      timeout: 3000,
+      // 注入真实 HOME：冒烟命令会触发 agent 启动初始化（如 trae-cli 的
+      // keyring 支持检查会写 test-key-<时间戳>），隔离 HOME 下找不到
+      // login.keychain-db 会触发系统弹窗
+      env: { ...process.env, ...restoreRealHomeEnv(), ...env },
+      // 冒烟超时 30s：真实 LLM CLI 有 key 时冒烟 <1s 完成（claude/codex），
+      // 但部分 CLI 首次 headless 响应较慢（实测 kimi -p 首次 8-24s，
+      // 冷启动+模型预热偶发更久）；12s 会误杀 kimi（exit 143 → 误判 mode='pty'）。
+      // 无 key 的 CLI 会快速非零退出（如 "No model configured"），不受影响。
+      timeout: 30_000,
     });
     let settled = false;
-    const finish = (ok: boolean) => {
+    let outTail = "";
+    let errTail = "";
+    const finish = (ok: boolean, reason: string) => {
       if (settled) return;
       settled = true;
+      if (!ok) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[cli-smoke] FAIL binary=${binaryPath} args=${JSON.stringify(args)} reason=${reason} ` +
+            `stdoutTail=${JSON.stringify(outTail.slice(-400))} stderrTail=${JSON.stringify(errTail.slice(-400))} ` +
+            `pathHasKimi=${String(process.env.PATH ?? "").includes("/.kimi-code/")}`,
+        );
+      }
       resolve(ok);
     };
-    child.stdout?.on("data", () => {});
-    child.stderr?.on("data", () => {});
-    child.on("error", () => finish(false));
-    child.on("exit", (code) => finish(code === 0));
+    child.stdout?.on("data", (chunk: Buffer) => {
+      outTail += chunk.toString("utf8");
+      if (outTail.length > 400) outTail = outTail.slice(-400);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      errTail += chunk.toString("utf8");
+      if (errTail.length > 400) errTail = errTail.slice(-400);
+    });
+    child.on("error", (err) => finish(false, `spawn-error:${err.message}`));
+    child.on("exit", (code, signal) => finish(code === 0, `exit:code=${code ?? "null"}:signal=${signal ?? "none"}`));
   });
 }
 
@@ -252,7 +274,7 @@ export class GenericCliSidecarAdapter extends BaseSidecarAdapter {
     return [...(this.config.args ?? [])];
   }
 
-  /** 构建 env：PATH 清洗 + config.env 覆盖（I5） */
+  /** 构建 env：PATH 清洗 + config.env 覆盖 + 真实 HOME 注入（I5） */
   private buildEnv(optsEnv?: Record<string, string | undefined>): Record<string, string> {
     const cleanPath = resolveCleanPath(optsEnv?.PATH);
     const env: Record<string, string | undefined> = {
@@ -260,7 +282,7 @@ export class GenericCliSidecarAdapter extends BaseSidecarAdapter {
       ...optsEnv,
       ...this.config.env,
     };
-    return { ...process.env, ...env } as Record<string, string>;
+    return { ...process.env, ...restoreRealHomeEnv(), ...env } as Record<string, string>;
   }
 
   private resolveBinary(): string {
@@ -290,7 +312,7 @@ export class GenericCliSidecarAdapter extends BaseSidecarAdapter {
   async exec(prompt: string, opts: CliExecOptions = {}): Promise<{ stdout: string; events: AgentEvent[] }> {
     const caps = await this.assertSupported(["headless", "pty"]);
     const binary = this.resolveBinary();
-    const timeoutMs = opts.timeoutMs ?? 60_000;
+    const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 60_000;
 
     return new Promise((resolve, reject) => {
       const parser = createOutputParser(this.config.outputParser ?? "jsonl", { agentId: this.config.agentId });
@@ -346,7 +368,7 @@ export class GenericCliSidecarAdapter extends BaseSidecarAdapter {
   async *stream(prompt: string, opts: CliExecOptions = {}): AsyncIterable<AgentEvent> {
     const caps = await this.assertSupported(["headless", "pty"]);
     const binary = this.resolveBinary();
-    const timeoutMs = opts.timeoutMs ?? 60_000;
+    const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 60_000;
 
     const child = spawn(binary, this.buildExecArgs(prompt, caps), {
       cwd: opts.cwd ?? this.config.cwd,

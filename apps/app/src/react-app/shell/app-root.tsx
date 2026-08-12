@@ -42,6 +42,8 @@ import {
 import { OpenworkContextPublisher } from "./openwork-context-publisher";
 import { SessionRoute } from "./session-route";
 import { SettingsRoute } from "./settings-route";
+import { AdminRoute } from "./admin-route";
+import { SpaceRoute } from "../domains/space/space-route";
 import { ShellConfigProvider } from "./shell-config";
 import { WelcomeRoute } from "./welcome-route";
 
@@ -441,6 +443,22 @@ export function AppRoot() {
                 element={
                   <DevProfiler id="SettingsRoute">
                     <SettingsRoute />
+                  </DevProfiler>
+                }
+              />
+              <Route
+                path="/admin"
+                element={
+                  <DevProfiler id="AdminRoute">
+                    <AdminRoute />
+                  </DevProfiler>
+                }
+              />
+              <Route
+                path="/space"
+                element={
+                  <DevProfiler id="SpaceRoute">
+                    <SpaceRoute />
                   </DevProfiler>
                 }
               />

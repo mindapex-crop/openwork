@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import net from "node:net";
 import { randomUUID } from "node:crypto";
+import { restoreRealHomeEnv } from "./agent-sidecar/home-env.js";
 
 export type ManagedOpencodeServer = {
   url: string;
@@ -73,6 +74,7 @@ export async function createManagedOpencodeServer(options: {
   const command = options.bin?.trim() || "opencode";
   const env = {
     ...process.env,
+    ...restoreRealHomeEnv(),
     ...options.env,
     OPENCODE_SERVER_USERNAME: username,
     OPENCODE_SERVER_PASSWORD: password,

@@ -88,6 +88,8 @@ type ComposerProps = {
   onModelVariantChange: (value: string | null) => void;
   agentLabel: string;
   selectedAgent: string | null;
+  /** 是否禁用 agent 选择器（默认跟随 busy；CLI 会话并行协作时单独控制） */
+  agentSelectorDisabled?: boolean;
   listAgents: () => Promise<Agent[]>;
   onSelectAgent: (agent: string | null) => void;
   listCommands: () => Promise<SlashCommandOption[]>;
@@ -129,6 +131,54 @@ const DEFAULT_AGENT_NAME = "openwork";
 
 function isNonDefaultAgent(agent: Agent) {
   return agent.name !== DEFAULT_AGENT_NAME;
+}
+
+/** 后端 enrichOpencodeAgentList 注入的本机检测字段 */
+export type ComposerAgent = Agent & {
+  available?: boolean;
+  source?: string;
+  installHint?: string;
+  binaryPath?: string;
+};
+
+function isInstalledCliAgent(agent: ComposerAgent) {
+  return agent.available === true;
+}
+
+function isUnavailableCliAgent(agent: ComposerAgent) {
+  return agent.available === false;
+}
+
+/** 排序：本机已安装的 CLI agent 优先，未知（opencode 原生/上游）次之，未安装的 CLI agent 沉底 */
+function agentAvailabilityRank(agent: ComposerAgent) {
+  if (isInstalledCliAgent(agent)) return 0;
+  if (isUnavailableCliAgent(agent)) return 2;
+  return 1;
+}
+
+/** 本机安装状态徽标：已安装 / 未安装（未安装的 CLI agent 禁用不可选） */
+function AgentAvailabilityBadge({ agent }: { agent: ComposerAgent }) {
+  if (isInstalledCliAgent(agent)) {
+    return (
+      <span
+        className="shrink-0 rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-600"
+        data-agent-installed
+      >
+        {t("composer.agent_installed")}
+      </span>
+    );
+  }
+  if (isUnavailableCliAgent(agent)) {
+    return (
+      <span
+        className="shrink-0 rounded-full bg-gray-3 px-2 py-0.5 text-[10px] font-medium text-gray-10"
+        data-agent-uninstalled
+      >
+        {t("composer.agent_not_installed")}
+      </span>
+    );
+  }
+  return null;
 }
 
 /**
@@ -292,7 +342,7 @@ export function ReactSessionComposer(props: ComposerProps) {
   const platform = usePlatform();
   const builtInExtensionsDisabled = useDesktopRestriction("allowBuiltInExtensions");
   let fileInput: HTMLInputElement | undefined;
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agents, setAgents] = useState<ComposerAgent[]>([]);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [refreshingOrganizationModels, setRefreshingOrganizationModels] = useState(false);
   const [commands, setCommands] = useState<SlashCommandOption[]>([]);
@@ -430,8 +480,23 @@ export function ReactSessionComposer(props: ComposerProps) {
   const mentionMatch = props.draft.match(/@([^\s@]*)$/);
   const mentionOpenNext = Boolean(mentionMatch);
   const mentionQuery = mentionMatch?.[1] ?? "";
-  const nonDefaultAgents = useMemo(() => agents.filter(isNonDefaultAgent), [agents]);
+  const nonDefaultAgents = useMemo(
+    () =>
+      agents
+        .filter(isNonDefaultAgent)
+        .sort((left, right) => agentAvailabilityRank(left) - agentAvailabilityRank(right)),
+    [agents],
+  );
   const showAgentPicker = props.selectedAgent !== null || nonDefaultAgents.length > 0;
+
+  // CLI agent 内置默认模型：选中带 model 声明的 CLI agent（如 kimi → kimi-code/k3）
+  // 时，模型选择器显示该模型，而不是 opencode 的全局默认模型（如 deepseek-v4-flash）。
+  const selectedAgentModel = useMemo(() => {
+    if (!props.selectedAgent) return undefined;
+    const agent = agents.find((a) => a.name === props.selectedAgent);
+    if (!agent?.model) return undefined;
+    return { providerID: agent.model.providerID, modelID: agent.model.modelID };
+  }, [agents, props.selectedAgent]);
 
   useEffect(() => {
     setSlashOpen(slashOpenNext);
@@ -462,7 +527,9 @@ export function ReactSessionComposer(props: ComposerProps) {
     return () => {
       cancelled = true;
     };
-  }, [props.listAgents]);
+    // selectedAgent 变化时重取：选中 CLI agent（如 kimi）后，agents 需含其 model
+    // 字段，模型选择器才能对齐到内置模型（如 kimi-code/k3）。
+  }, [props.listAgents, props.selectedAgent]);
 
   useEffect(() => {
     setSkills(props.skills ?? []);
@@ -895,6 +962,11 @@ export function ReactSessionComposer(props: ComposerProps) {
   };
 
   const applyAgentSelection = (name: string | null) => {
+    if (name !== null) {
+      const agent = agents.find((candidate) => candidate.name === name);
+      // 未安装的 CLI agent 不可选中（按钮已禁用，键盘路径这里兜底拦截）
+      if (agent && isUnavailableCliAgent(agent)) return;
+    }
     props.onSelectAgent(name);
     setAgentMenuOpen(false);
     setToolMenuOpen(false);
@@ -905,15 +977,25 @@ export function ReactSessionComposer(props: ComposerProps) {
     setToolMenuOpen(false);
   };
 
+  // Selecting an MCP server from the + menu inserts a mention pill into the
+  // composer (`@server-name`), mirroring skill/file selection behavior.
+  const applyMcpSelection = (entry: McpServerEntry) => {
+    const name = entry.name || entry.id || "mcp";
+    props.onInsertMention("mcp", name);
+    setToolMenuOpen(false);
+  };
+
   // Configure lands on the matching OpenWork Extensions section: skills and
   // plugin tabs keep their scoped views, everything else opens the inventory.
   const openToolMenuSettings = () => {
     const section: ToolMenuSettingsSection =
       toolMenuSection === "commands" || toolMenuSection === "skills"
         ? toolMenuSection
-        : toolMenuSection === "agents" || toolMenuSection === "extensions"
-          ? "extensions"
-          : "plugins";
+        : toolMenuSection === "mcps"
+          ? "mcps"
+          : toolMenuSection === "agents" || toolMenuSection === "extensions"
+            ? "extensions"
+            : "plugins";
     props.onOpenSettingsSection?.(section);
   };
 
@@ -1418,6 +1500,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                             ["agents", t("composer.agents_label")],
                             ["commands", t("dashboard.commands")],
                             ["skills", t("dashboard.skills")],
+                            ["mcps", t("composer.mcps_label")],
                             ["extensions", "Extensions"],
                           ] as const).map(([section, label]) => (
                             <button
@@ -1470,16 +1553,22 @@ export function ReactSessionComposer(props: ComposerProps) {
                               </button>
                               {nonDefaultAgents.map((agent) => {
                                 const active = props.selectedAgent === agent.name;
+                                const unavailable = isUnavailableCliAgent(agent);
                                 return (
                                   <button
                                     key={agent.name}
                                     type="button"
-                                    className={`flex w-full items-start gap-3 rounded-[16px] px-3 py-2.5 text-left transition-colors hover:bg-gray-2/70 ${active ? "bg-gray-2 text-gray-12" : "text-gray-11"}`}
+                                    disabled={unavailable}
+                                    title={unavailable ? (agent.installHint ?? t("composer.agent_not_installed")) : undefined}
+                                    className={`flex w-full items-start gap-3 rounded-[16px] px-3 py-2.5 text-left transition-colors hover:bg-gray-2/70 ${active ? "bg-gray-2 text-gray-12" : "text-gray-11"} ${unavailable ? "cursor-not-allowed opacity-45 hover:bg-transparent" : ""}`}
                                     onClick={() => applyAgentSelection(agent.name)}
                                   >
                                     <Zap size={14} className="mt-0.5 shrink-0 text-gray-9" />
                                     <div className="min-w-0 flex-1">
-                                      <div className="truncate text-xs font-semibold">{agent.name.charAt(0).toUpperCase() + agent.name.slice(1)}</div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="truncate text-xs font-semibold">{agent.name.charAt(0).toUpperCase() + agent.name.slice(1)}</span>
+                                        <AgentAvailabilityBadge agent={agent} />
+                                      </div>
                                       {agent.description ? <div className="truncate text-xs text-gray-10">{agent.description}</div> : null}
                                     </div>
                                     {active ? <Check size={14} className="mt-0.5 shrink-0 text-gray-10" /> : null}
@@ -1547,6 +1636,45 @@ export function ReactSessionComposer(props: ComposerProps) {
                             ) : (
                               <div className="px-3 py-2 text-xs text-gray-10">
                                 {(!skillsLoaded && skillsLoading) || (!commandsLoaded && commandsLoading) ? t("composer.loading_commands") : t("context_panel.no_skills")}
+                              </div>
+                            )
+                          ) : null}
+                          {toolMenuSection === "mcps" ? (
+                            activeMcpItems.length > 0 ? (
+                              <div className="grid gap-1">
+                                {activeMcpItems.map(({ entry, status }) => (
+                                  <button
+                                    key={entry.id ?? entry.name}
+                                    type="button"
+                                    className="flex w-full items-start gap-3 rounded-[16px] px-3 py-2.5 text-left text-gray-11 transition-colors hover:bg-gray-2/70"
+                                    onClick={() => applyMcpSelection(entry)}
+                                  >
+                                    <Plug size={14} className="mt-0.5 shrink-0 text-gray-9" />
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center justify-between gap-3">
+                                        <div className="truncate text-xs font-semibold text-gray-11">@{entry.name || entry.id}</div>
+                                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${mcpStatusBadgeClass(status)}`}>
+                                          {formatMcpStatusLabel(status)}
+                                        </span>
+                                      </div>
+                                      <div className="truncate text-xs text-gray-10">
+                                        {entry.origin === "openwork-connect"
+                                          ? [entry.marketplaceName, entry.pluginName].filter(Boolean).join(" · ")
+                                            || entry.config.url
+                                            || "Remote app"
+                                          : entry.config.type === "remote"
+                                            ? entry.config.url ?? entry.config.command?.join(" ") ?? "Remote app"
+                                            : entry.config.command?.join(" ") ?? "Local app"}
+                                      </div>
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="px-3 py-2 text-xs text-gray-10">
+                                {!mcpLoaded && mcpLoading
+                                  ? t("composer.loading_commands")
+                                  : (mcpStatus ?? t("composer.no_mcps", { defaultValue: "No MCP servers enabled." }))}
                               </div>
                             )
                           ) : null}
@@ -1664,7 +1792,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                     type="button"
                     className="flex h-9 max-h-9 items-center gap-1 rounded-md px-1.5 text-[12px] font-medium text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12"
                     onClick={() => setAgentMenuOpen((value) => !value)}
-                    disabled={props.busy}
+                    disabled={props.agentSelectorDisabled ?? props.busy}
                     aria-expanded={agentMenuOpen}
                     title={t("composer.agent_label")}
                   >
@@ -1698,6 +1826,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                         </button>
                         {nonDefaultAgents.map((agent, index) => {
                           const active = props.selectedAgent === agent.name;
+                          const unavailable = isUnavailableCliAgent(agent);
                           return (
                             <button
                               key={agent.name}
@@ -1705,14 +1834,20 @@ export function ReactSessionComposer(props: ComposerProps) {
                                 agentItemRefs.current[index + 1] = element;
                               }}
                               type="button"
-                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-xs transition-colors ${active || agentMenuIndex === index + 1 ? "bg-gray-2 text-gray-12" : "text-gray-11 hover:bg-gray-2/70"}`}
+                              disabled={unavailable}
+                              title={unavailable ? (agent.installHint ?? t("composer.agent_not_installed")) : undefined}
+                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-xs transition-colors ${active || agentMenuIndex === index + 1 ? "bg-gray-2 text-gray-12" : "text-gray-11 hover:bg-gray-2/70"} ${unavailable ? "cursor-not-allowed opacity-45 hover:bg-transparent" : ""}`}
                               onMouseEnter={() => setAgentMenuIndex(index + 1)}
                               onMouseDown={(event) => {
                                 event.preventDefault();
+                                if (unavailable) return;
                                 applyAgentSelection(agent.name);
                               }}
                             >
-                              <span className="truncate">{agent.name.charAt(0).toUpperCase() + agent.name.slice(1)}</span>
+                              <span className="flex min-w-0 items-center gap-2">
+                                <span className="truncate">{agent.name.charAt(0).toUpperCase() + agent.name.slice(1)}</span>
+                                <AgentAvailabilityBadge agent={agent} />
+                              </span>
                               {active ? <Check size={14} className="text-gray-10" /> : null}
                             </button>
                           );
@@ -1724,7 +1859,7 @@ export function ReactSessionComposer(props: ComposerProps) {
 
                 <ModelSelect
                   open={props.modelPickerOpen}
-                  value={props.selectedModel}
+                  value={selectedAgentModel ?? props.selectedModel}
                   hideValue={props.organizationModelsEmpty}
                   onOpenChange={props.onModelPickerOpenChange}
                   onChange={(model) => {

@@ -79,6 +79,8 @@ export default {
   "common.submit": "提交",
   "common.unknown": "未知",
   "composer.agent_label": "智能体",
+  "composer.agent_installed": "已安装",
+  "composer.agent_not_installed": "未安装",
   "composer.any_file_type_supported": "支持任何文件类型。",
   "composer.attach_files": "附加文件",
   "composer.attachments_unavailable": "附件功能不可用。",

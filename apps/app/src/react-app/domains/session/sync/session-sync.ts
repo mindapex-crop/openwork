@@ -825,7 +825,7 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
 
   if (event.type === "message.updated") {
     const props = (event.properties ?? {}) as {
-      info?: { id?: string; role?: UIMessage["role"] | string; sessionID?: string; time?: { created?: number; completed?: number } };
+      info?: { id?: string; role?: UIMessage["role"] | string; sessionID?: string; time?: { created?: number; completed?: number }; agent?: string };
     };
     const info = props.info;
     if (!info?.id || !info.sessionID || (info.role !== "user" && info.role !== "assistant" && info.role !== "system")) {
@@ -835,12 +835,14 @@ function applyEvent(entry: SyncEntry, workspaceId: string, event: OpencodeEvent)
     if (!isTrackedSession(entry, info.sessionID)) return;
     const created = info.time?.created;
     const completed = info.time?.completed;
+    const opencodeMeta: Record<string, unknown> = {};
+    if (typeof created === "number") opencodeMeta.created = created;
+    if (typeof completed === "number") opencodeMeta.completed = completed;
+    if (info.agent) opencodeMeta.agent = info.agent;
     const next = {
       id: info.id,
       role: info.role,
-      ...(typeof created === "number"
-        ? { metadata: { opencode: { created, ...(typeof completed === "number" ? { completed } : {}) } } }
-        : {}),
+      ...(Object.keys(opencodeMeta).length > 0 ? { metadata: { opencode: opencodeMeta } } : {}),
       parts: [],
     } satisfies UIMessage;
     queryClient.setQueryData<UIMessage[]>(transcriptKey(workspaceId, info.sessionID), (current = []) =>

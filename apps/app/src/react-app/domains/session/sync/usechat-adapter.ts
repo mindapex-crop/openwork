@@ -203,12 +203,16 @@ export function snapshotToUIMessages(snapshot: OpenworkSessionSnapshot): UIMessa
     const created = message.info.time?.created;
     const time = message.info.time;
     const completed = time && "completed" in time ? time.completed : undefined;
+    // CLI agent 会话中每条消息带 agent 归属；透传到 metadata 供消息徽标渲染
+    const infoAgent = (message.info as { agent?: string }).agent;
+    const opencodeMeta: Record<string, unknown> = {};
+    if (typeof created === "number") opencodeMeta.created = created;
+    if (typeof completed === "number") opencodeMeta.completed = completed;
+    if (infoAgent) opencodeMeta.agent = infoAgent;
     const uiMessage = {
       id: message.info.id,
       role: message.info.role,
-      ...(typeof created === "number"
-        ? { metadata: { opencode: { created, ...(typeof completed === "number" ? { completed } : {}) } } }
-        : {}),
+      ...(Object.keys(opencodeMeta).length > 0 ? { metadata: { opencode: opencodeMeta } } : {}),
       parts: message.parts.flatMap<UIMessage["parts"][number]>((part) => {
         if (part.type === "text") {
           if (part.synthetic || part.ignored) return [];

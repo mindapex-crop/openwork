@@ -106,7 +106,7 @@ import {
 } from "@/lib/tool-activity"
 import { faviconUrlForHref } from "@/lib/favicon"
 import { cn } from "@/lib/utils"
-import { groupMessages, isMessageGroup, getLastTextPart, getAggregateOnlyParts, getAssistantRenderGroups, getFileTitle, getMediaBadge, getMessageCompleted, getMessageCreated, formatMessageTimestamp, splitTurnAtAnswer, type UIMessageWithIndex, getMessagesText, getSafeFileDownloadUrl, getSafeFileRevealPath } from "./utils"
+import { groupMessages, isMessageGroup, getLastTextPart, getAggregateOnlyParts, getAssistantRenderGroups, getFileTitle, getMediaBadge, getMessageCompleted, getMessageCreated, getMessageAgent, formatMessageTimestamp, splitTurnAtAnswer, type UIMessageWithIndex, getMessagesText, getSafeFileDownloadUrl, getSafeFileRevealPath } from "./utils"
 import type { AnyToolPart } from "@/lib/tool-aggregate"
 
 const SEARCH_HIGHLIGHT_MARK_CLASS = "rounded px-0.5 bg-amber-4/70 text-current"
@@ -410,9 +410,25 @@ type AssistantMessageProps = {
   hideReasoning?: boolean
 }
 
+/** 多 CLI agent 同窗口会话：消息上方的 agent 归属徽标 */
+function AgentTag({ agent, align }: { agent: string; align: "start" | "end" }) {
+  return (
+    <div className={cn("flex w-full items-center", align === "end" ? "justify-end" : "justify-start")}>
+      <span
+        className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/50 px-2 py-0.5 text-[11px] font-medium leading-none text-muted-foreground"
+        data-agent-tag
+        title={`Agent: ${agent}`}
+      >
+        {agent}
+      </span>
+    </div>
+  )
+}
+
 const AssistantMessage = React.memo(
   ({ message, hideReasoning }: AssistantMessageProps) => {
-    const { showThinking, highlightQuery } = useMessageList()
+    const { showThinking, highlightQuery, showAgentTags } = useMessageList()
+    const agent = showAgentTags ? getMessageAgent(message) : null
     const assistantRenderGroups = React.useMemo(
       () => {
         const groups = getAssistantRenderGroups(message.parts, showThinking)
@@ -427,6 +443,7 @@ const AssistantMessage = React.memo(
         data-message-id={message.id}
         data-message-role={message.role}
       >
+        {agent ? <AgentTag agent={agent} align="start" /> : null}
         <div className="group flex w-full flex-col gap-0 space-y-2">
           {assistantRenderGroups.map((group, index) => {
             if (group.kind === "text") {
@@ -598,8 +615,9 @@ function renderUserTextWithSkillChips(text: string, highlightQuery: string | und
 
 const UserMessage = React.memo(
   ({ message, isStreaming }: UserMessageProps) => {
-    const { onRevertToUserMessage, onForkAtMessage, onEditUserMessage, highlightQuery } = useMessageList()
+    const { onRevertToUserMessage, onForkAtMessage, onEditUserMessage, highlightQuery, showAgentTags } = useMessageList()
     const messageText = React.useMemo(() => getMessagesText([message]), [message])
+    const agent = showAgentTags ? getMessageAgent(message) : null
     const inlineParts = React.useMemo(
       () => message.parts.filter((part) => (part.type === "text" && Boolean(part.text)) || isFileUIPart(part)),
       [message.parts],
@@ -612,6 +630,7 @@ const UserMessage = React.memo(
         data-message-id={message.id}
         data-message-role={message.role}
       >
+        {agent ? <AgentTag agent={agent} align="end" /> : null}
         <ContextMenu>
           <ContextMenuTrigger
             // Override Trigger's select-none so user bubbles stay copyable.

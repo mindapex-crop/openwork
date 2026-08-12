@@ -188,7 +188,8 @@ describe("Approval Registry", () => {
 
     const begin = registry.begin("req-1");
     expect(begin.state).toBe("ready");
-    expect(begin.ctx?.requestId).toBe("req-1");
+    if (begin.state !== "ready") throw new Error("expected ready state");
+    expect((begin.ctx as { requestId?: string }).requestId).toBe("req-1");
   });
 
   it("double begin: busy", () => {
@@ -223,7 +224,7 @@ describe("Approval Registry", () => {
     const registry = createApprovalRegistry();
     registry.remember("req-1", { requestId: "req-1", value: 42 });
 
-    const ctx = registry.get("req-1");
+    const ctx = registry.get("req-1") as { requestId?: string; value?: number } | undefined;
     expect(ctx?.requestId).toBe("req-1");
     expect(ctx?.value).toBe(42);
   });

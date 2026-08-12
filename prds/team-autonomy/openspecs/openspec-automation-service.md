@@ -501,9 +501,9 @@ node --import file://.../tsx/dist/loader.mjs --test --test-timeout=15000 \
 7. **T-due 测试修复**：`createAutomation` 默认 `skipOnOverlap=true`，`manualRun` 留下的 `waiting_trigger` run 会触发 overlap 跳过；测试改为显式 `skipOnOverlap: false` 以验证基本 due 逻辑（`T-overlap` 已独立覆盖 overlap 行为）。
 
 ### 7.9 后续待办（不在本次 P1 ③ 范围内）
-- 调度器 loop 进程（独立 worker，定期调 `listDueAutomations` + `startRun` + `advanceRun`）
-- `scopedApprovals` 的 approval workflow（当前 schema 已就绪，service 未实现）
-- `qualityGate` 的质量门校验（当前 schema 已就绪，service 未实现）
-- `deliveryTargets` 的多渠道投递（当前 schema 已就绪，service 未实现）
-- 完整 IANA 时区支持（引入 `luxon` 或类似库后替换 `TZ_OFFSET_HOURS` 静态表）
-- `max_cost_cents_per_run` 的预算检查（当前 schema 已就绪，service 未实现）
+- ~~调度器 loop 进程~~ → ✅ 已实现：`scheduler-worker.ts`（`SchedulerWorker` / `createSchedulerWorker`，tick 防重入 + batch_id 幂等 + timer.unref）
+- ~~`scopedApprovals` 的 approval workflow~~ → ✅ 已实现：`decideScopedApproval` 纯函数 + `checkScopedApproval` service（approve_tools/approve_actions 白名单、每日配额）
+- ~~`qualityGate` 的质量门校验~~ → ✅ 已实现：`evaluateQualityGate` 纯函数 + `evaluateQualityForAutomation` service（min_item_count / dedupe_keys / fresh_hours / relevance_terms）
+- ~~`deliveryTargets` 的多渠道投递~~ → ✅ 已实现：`deliverRunResults` + `registerDeliveryHandler` 注册表 + `deliveryIdempotencyKey` 幂等
+- ~~完整 IANA 时区支持~~ → ✅ 已实现：`getTimezoneOffsetMs`（Intl.DateTimeFormat 缓存，替换 TZ_OFFSET_HOURS 静态表），`computeNextRunAt` 支持任意 IANA 时区
+- ~~`max_cost_cents_per_run` 的预算检查~~ → ✅ 已实现：`checkCostBudget` 纯函数 + `advanceRun` 集成（超限返回 402 BUDGET_EXCEEDED）

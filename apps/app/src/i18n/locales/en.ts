@@ -84,6 +84,8 @@ export default {
   "common.submit": "Submit",
   "common.unknown": "Unknown",
   "composer.agent_label": "Agent",
+  "composer.agent_installed": "Installed",
+  "composer.agent_not_installed": "Not installed",
   "composer.agent_selected": "Agent set to {agent}.",
   "composer.agent_selected_default": "Agent reset to default.",
   "composer.agents_label": "Agents",

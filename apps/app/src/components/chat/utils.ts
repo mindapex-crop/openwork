@@ -116,6 +116,14 @@ export function getMessageCompleted(message: UIMessage): number | null {
   return typeof completed === "number" ? completed : null
 }
 
+/** Which agent produced this message (CLI agent 会话归属，如 "kimi" / "claude-code"）。 */
+export function getMessageAgent(message: UIMessage): string | null {
+  const opencode = getMessageOpencodeMetadata(message)
+  if (!opencode || !("agent" in opencode)) return null
+  const agent: unknown = opencode.agent
+  return typeof agent === "string" && agent.trim() ? agent : null
+}
+
 export function formatMessageTimestamp(timestampMs: number): string {
   const date = new Date(timestampMs)
   const now = new Date()

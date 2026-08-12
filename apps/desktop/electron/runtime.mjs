@@ -1249,6 +1249,12 @@ export function createRuntimeManager({ app, desktopRoot, listLocalWorkspacePaths
     if (process.env.OPENWORK_DEV_MODE === "1") {
       const devPaths = await ensureDevModePaths();
       env.OPENWORK_DEV_MODE = "1";
+      // 隔离 HOME 会破坏用户已安装/已登录的 CLI agent（kimi/claude/codex 等
+      // 都从 $HOME/.<agent> 读取登录态与配置）。先把真实 HOME 存下来，
+      // 供 server 的 CLI agent 桥接层（cli-agent-session.ts）恢复使用。
+      if (!process.env.OPENWORK_REAL_HOME) {
+        env.OPENWORK_REAL_HOME = process.env.HOME ?? "";
+      }
       env.HOME = devPaths.homeDir;
       env.USERPROFILE = devPaths.homeDir;
       env.XDG_CONFIG_HOME = devPaths.xdgConfigHome;

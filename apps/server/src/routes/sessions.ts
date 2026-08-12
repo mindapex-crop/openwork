@@ -10,6 +10,14 @@ import {
   type SessionGroupDefinition,
   type SessionGroupState,
 } from "../session-groups.js";
+import {
+  buildCliSessionInfo,
+  buildCliSessionMessages,
+  buildCliSessionSnapshot,
+  deleteCliSession,
+  getCliSessionRecord,
+  isCliSession,
+} from "../cli-agent-session.js";
 import type { ServerConfig, TokenScope, WorkspaceInfo } from "../types.js";
 import { addRoute, type RequestContext, type Route } from "./registry.js";
 
@@ -377,6 +385,11 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     if (!sessionId) {
       throw new ApiError(400, "invalid_payload", "sessionId is required");
     }
+    // CLI agent 会话：从本地 store 读取（不 consult opencode sidecar）
+    if (isCliSession(workspace.id, sessionId)) {
+      const record = getCliSessionRecord(workspace.id, sessionId);
+      return jsonResponse({ item: record ? buildCliSessionInfo(record) : null });
+    }
     const item = await readWorkspaceSession(workspace, sessionId);
     return jsonResponse({ item });
   });
@@ -386,6 +399,14 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     const sessionId = (ctx.params.sessionId ?? "").trim();
     if (!sessionId) {
       throw new ApiError(400, "invalid_payload", "sessionId is required");
+    }
+    // CLI agent 会话：从本地 store 读取
+    if (isCliSession(workspace.id, sessionId)) {
+      const record = getCliSessionRecord(workspace.id, sessionId);
+      const items = record
+        ? buildCliSessionMessages(record, parseOptionalPositiveInteger(ctx.url.searchParams.get("limit"), "limit"))
+        : [];
+      return jsonResponse({ items });
     }
     const items = await readWorkspaceSessionMessages(workspace, sessionId, {
       limit: parseOptionalPositiveInteger(ctx.url.searchParams.get("limit"), "limit"),
@@ -398,6 +419,12 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     const sessionId = (ctx.params.sessionId ?? "").trim();
     if (!sessionId) {
       throw new ApiError(400, "invalid_payload", "sessionId is required");
+    }
+    // CLI agent 会话：从本地 store 构建 snapshot（UI transcript 轮询此端点）
+    if (isCliSession(workspace.id, sessionId)) {
+      const record = getCliSessionRecord(workspace.id, sessionId);
+      const item = record ? buildCliSessionSnapshot(record) : null;
+      return jsonResponse({ item });
     }
     const item = await readWorkspaceSessionSnapshot(workspace, sessionId, {
       limit: parseOptionalPositiveInteger(ctx.url.searchParams.get("limit"), "limit"),
@@ -413,6 +440,12 @@ export function registerSessionRoutes(options: RegisterSessionRoutesOptions): vo
     const sessionId = (ctx.params.sessionId ?? "").trim();
     if (!sessionId) {
       throw new ApiError(400, "invalid_payload", "sessionId is required");
+    }
+
+    // CLI agent 会话：删除本地 store 记录（opencode 侧会话由 opencode 管理）
+    if (isCliSession(workspace.id, sessionId)) {
+      deleteCliSession(workspace.id, sessionId);
+      return jsonResponse({ ok: true });
     }
 
     const opencode = createWorkspaceOpencodeClient(config, workspace);

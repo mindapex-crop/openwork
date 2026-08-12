@@ -100,6 +100,12 @@ export interface AgentPreset extends AgentSidecarConfig {
    *   - 其他交互式 PTY 走 "persistent-pty"（必须 process pool 限制并发）
    */
   executionMode?: PtyExecutionMode;
+  /**
+   * CLI 内置默认模型（与 opencode 的模型选择无关）。
+   * 例如 kimi 的 config.toml default_model = "kimi-code/k3"。
+   * 注入 agent 列表时透传给 UI：选中该 CLI agent 后，模型选择器应显示此模型而非 opencode 的全局模型。
+   */
+  defaultModel?: { providerID: string; modelID: string };
 }
 
 /**
@@ -148,13 +154,21 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     args: ["acp"],
     capabilities: ACP_DEFAULT_CAPS,
     cliProfile: {
-      // headless -p 未验证；走 L3 ACP（kimi acp），Zed agent_servers 证据（--acp）
-      headless: false,
+      // L3 ACP（kimi acp）优先；headless -p 模式实测可用（2026-08-12）
+      headless: true,
+      headlessArgs: ["-p"],
     },
     installHint: "curl -fsSL https://kimi.com/code/install.sh | bash",
-    // 优先 ACP；同时提供 PTY headless 一次性降级
+    // kimi CLI 内置默认模型（config.toml default_model），与 opencode 模型选择无关
+    defaultModel: { providerID: "kimi", modelID: "kimi-code/k3" },
+    // 优先 ACP；ACP 因认证/启动失败时自动降级 headless-oneshot（kimi -p）→ PTY
     preferProtocolOrder: ["acp", "headless-oneshot", "pty"],
     altPresets: [
+      {
+        protocol: "pty",
+        executionMode: "headless-oneshot",
+        cliProfile: { headless: true, headlessArgs: ["-p"] },
+      },
       {
         protocol: "pty",
         executionMode: "persistent-pty",
@@ -429,6 +443,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     installHint: "npm install -g @anthropic-ai/claude-code",
     preferProtocolOrder: ["headless-oneshot", "pty"],
     executionMode: "headless-oneshot",
+    // Claude Code 默认模型（官方默认 Claude Sonnet 4）
+    defaultModel: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
   },
 
   codex: {
@@ -448,6 +464,8 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     },
     preferProtocolOrder: ["headless-oneshot", "pty"],
     executionMode: "headless-oneshot",
+    // Codex CLI 默认模型
+    defaultModel: { providerID: "openai", modelID: "gpt-5-codex" },
   },
 
   "cursor-agent": {

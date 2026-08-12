@@ -22,6 +22,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolveCleanPath } from "../detect.js";
+import { restoreRealHomeEnv } from "../home-env.js";
 import { buildTransportEnv } from "../transport.js";
 import { BaseSidecarAdapter } from "./base.js";
 import type { SidecarHandle, SidecarStartOptions, TransportInfo } from "../types.js";
@@ -49,7 +50,8 @@ export class McpSidecarAdapter extends BaseSidecarAdapter {
 
     this.child = spawn(binary, args, {
       cwd: options.cwd,
-      env: { ...process.env, ...env } as Record<string, string>,
+      // 注入真实 HOME：避免 agent 在 dev 隔离 HOME 下找不到 login.keychain-db 触发系统弹窗
+      env: { ...process.env, ...restoreRealHomeEnv(), ...env } as Record<string, string>,
       stdio: ["pipe", "pipe", "pipe"],
     });
 

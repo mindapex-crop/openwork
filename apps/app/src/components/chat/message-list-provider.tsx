@@ -16,6 +16,8 @@ interface MessageListContextValue {
   developerMode: boolean
   displaySuggestions: boolean
   providerConnectedCount: number
+  /** CLI agent 会话：消息上方渲染 agent 归属徽标 */
+  showAgentTags: boolean
   dispatchAction: (action: DispatchAction) => void
   setPrompt: (prompt: string) => void
   onRevertToUserMessage: (messageId: string) => void
@@ -49,6 +51,7 @@ interface MessageListProviderProps {
   onMcpRetry: (action: ChatToolReconnectAction) => void | Promise<void>
   displaySuggestions: boolean
   providerConnectedCount: number
+  showAgentTags?: boolean
   dispatchAction: (action: DispatchAction) => void
   setPrompt: (prompt: string) => void
 }
@@ -76,6 +79,7 @@ export function MessageListProvider({
   onMcpReconnect,
   onMcpReopenAuthorization,
   onMcpRetry,
+  showAgentTags = false,
 }: MessageListProviderProps) {
   const value = React.useMemo(
     () => ({
@@ -86,6 +90,7 @@ export function MessageListProvider({
       developerMode,
       displaySuggestions,
       providerConnectedCount,
+      showAgentTags,
       dispatchAction,
       setPrompt,
       onRevertToUserMessage,
@@ -103,6 +108,7 @@ export function MessageListProvider({
       developerMode,
       displaySuggestions,
       providerConnectedCount,
+      showAgentTags,
       dispatchAction,
       setPrompt,
       onRevertToUserMessage,

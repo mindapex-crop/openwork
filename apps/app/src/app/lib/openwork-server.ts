@@ -105,6 +105,43 @@ export type OpenworkWorkspaceList = {
   activeId?: string | null;
 };
 
+export type OpenworkSpacePlan = {
+  id: string;
+  title: string;
+  detail: string;
+  status: "backlog" | "active" | "done";
+  updatedAt: number;
+};
+
+export type OpenworkSpaceTask = {
+  id: string;
+  title: string;
+  status: "todo" | "doing" | "done";
+  priority: "low" | "medium" | "high";
+  updatedAt: number;
+};
+
+export type OpenworkSpaceSettings = {
+  name: string;
+  description: string;
+  skills: string[];
+  env: Record<string, string>;
+};
+
+export type OpenworkSpaceData = {
+  settings: OpenworkSpaceSettings;
+  plans: OpenworkSpacePlan[];
+  tasks: OpenworkSpaceTask[];
+};
+
+export type OpenworkSpaceAsset = {
+  path: string;
+  kind: "file" | "dir";
+  size: number;
+  mtimeMs: number;
+  depth: number;
+};
+
 export type OpenworkSessionMessage = {
   info: Message;
   parts: Part[];
@@ -1327,6 +1364,8 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
       requestJson<OpenworkRuntimeSnapshot>(baseUrl, "/runtime/versions", { token, hostToken, timeoutMs: timeouts.status }),
     status: () => requestJson<OpenworkServerDiagnostics>(baseUrl, "/status", { token, hostToken, timeoutMs: timeouts.status }),
     capabilities: () => requestJson<OpenworkServerCapabilities>(baseUrl, "/capabilities", { token, hostToken, timeoutMs: timeouts.capabilities }),
+    listAgentRuntimes: () =>
+      requestJson<{ capabilities: AgentRuntimeCapability[] }>(baseUrl, "/agent-runtimes", { token, hostToken, timeoutMs: timeouts.capabilities }),
     setConnectState: (connectEnabled: boolean) => requestJson<OpenworkConnectState>(baseUrl, "/experimental/connect/state", { token, hostToken, method: "PUT", body: { connectEnabled }, timeoutMs: timeouts.config }),
     callExtensionAction: (payload: OpenworkExtensionActionCall) =>
       requestJson<OpenworkExtensionActionResult>(baseUrl, "/experimental/extensions/call", {
@@ -1413,6 +1452,30 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
       requestJson<{ state: OpenworkSessionGroupState; updatedAt: number | null }>(
         baseUrl,
         `/workspace/${encodeURIComponent(workspaceId)}/session-groups`,
+        { token, hostToken, timeoutMs: timeouts.sessionRead },
+      ),
+    getSpace: (workspaceId: string) =>
+      requestJson<{ data: OpenworkSpaceData; updatedAt: number | null }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/space`,
+        { token, hostToken, timeoutMs: timeouts.sessionRead },
+      ),
+    putSpace: (workspaceId: string, data: OpenworkSpaceData) =>
+      requestJson<{ data: OpenworkSpaceData; updatedAt: number }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/space`,
+        { token, hostToken, method: "PUT", body: data, timeoutMs: timeouts.config },
+      ),
+    patchSpace: (workspaceId: string, patch: Partial<Pick<OpenworkSpaceData, "settings" | "plans" | "tasks">>) =>
+      requestJson<{ data: OpenworkSpaceData; updatedAt: number }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/space`,
+        { token, hostToken, method: "PATCH", body: patch, timeoutMs: timeouts.config },
+      ),
+    listSpaceAssets: (workspaceId: string) =>
+      requestJson<{ items: OpenworkSpaceAsset[] }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/space/assets`,
         { token, hostToken, timeoutMs: timeouts.sessionRead },
       ),
     putSessionGroups: (workspaceId: string, state: OpenworkSessionGroupState) =>
@@ -2133,3 +2196,21 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
 }
 
 export type OpenworkServerClient = ReturnType<typeof createOpenworkServerClient>;
+
+/** CLI agent runtime 能力条目（镜像 server runtime-registry.ts 的 RuntimeAgentCapability） */
+export type AgentRuntimeCapability = {
+  agentId: string;
+  label: string;
+  available: boolean;
+  binaryPath?: string;
+  version?: string;
+  confidence?: number;
+  protocol: string;
+  engine: string;
+  declaredHeadless: boolean;
+  error?: string;
+  vendor?: string;
+  homepage?: string;
+  installHint?: string;
+  defaultModel?: { providerID: string; modelID: string };
+};

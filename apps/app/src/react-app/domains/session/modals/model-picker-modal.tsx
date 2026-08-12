@@ -37,6 +37,7 @@ import {
   OPENWORK_MODELS_PROVIDER_NAME,
   openWorkModelsPromoChangedEvent,
 } from "../../cloud/openwork-models-promo";
+import type { CliAgentItem } from "./use-model-picker";
 
 export const MODEL_PICKER_DEFAULT_SUBTITLE = "Select a model for this session.";
 export const MODEL_PICKER_UNAVAILABLE_SUBTITLE = "The model you were using is no longer available, please select a different model for this session.";
@@ -66,6 +67,8 @@ export type ModelPickerModalProps = {
   onRefreshOpenWorkModels?: () => void | Promise<void>;
   onRefreshOrganizationModels?: () => void | Promise<void>;
   restrictToCloud?: boolean;
+  /** 本机可用的 CLI agent 目录（all models 的 CLI Agents 分组） */
+  cliAgents?: CliAgentItem[];
 };
 
 type ProviderGroup = {
@@ -73,6 +76,7 @@ type ProviderGroup = {
   name: string;
   isNew: boolean;
   isCloud: boolean;
+  isConnected: boolean;
   isDisabled: boolean;
   hasCurrent: boolean;
   recommended: ModelOption[];
@@ -171,6 +175,20 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
     );
   }, [props.options, props.query]);
 
+  // Filter CLI agents by search (same query box)
+  const filteredCliAgents = useMemo(() => {
+    const q = props.query.trim().toLowerCase();
+    const all = props.cliAgents ?? [];
+    if (!q) return all;
+    return all.filter(
+      (a) =>
+        a.label.toLowerCase().includes(q) ||
+        a.agentId.toLowerCase().includes(q) ||
+        (a.vendor ?? "").toLowerCase().includes(q) ||
+        a.protocol.toLowerCase().includes(q),
+    );
+  }, [props.cliAgents, props.query]);
+
   // Group by provider
   const providerGroups = useMemo<ProviderGroup[]>(() => {
     const map = new Map<string, ProviderGroup>();
@@ -182,6 +200,7 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
           name: opt.description ?? resolveProviderDisplayName(opt.providerID),
           isNew: !!opt.isRecommended,
           isCloud: opt.source === "cloud",
+          isConnected: opt.connected !== false,
           isDisabled: disabledSet.has(opt.providerID),
           hasCurrent: false,
           recommended: [],
@@ -405,7 +424,7 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
 
           {/* Content */}
           <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 -mr-1">
-            {emptyState ? (
+            {emptyState && filteredCliAgents.length === 0 ? (
               <div className="space-y-3 rounded-2xl border border-dls-border bg-dls-hover/30 px-4 py-6 text-center">
                 <div className="text-sm text-dls-secondary">
                   {t(emptyState.messageKey)}
@@ -428,19 +447,29 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
                 ) : null}
               </div>
             ) : (
-              providerGroups.map((group) => (
-                <ProviderAccordion
-                  key={group.id}
-                  group={group}
-                  expanded={expandedProviders.has(group.id)}
-                  current={props.current}
-                  canToggleProvider={!!props.onToggleProvider}
-                  onToggleExpand={() => toggleProvider(group.id)}
-                  onToggleProvider={props.onToggleProvider}
-                  onSelect={handleSelect}
-                  organizationProviderLabel={organizationProviderLabel}
-                />
-              ))
+              <>
+                {providerGroups.map((group) => (
+                  <ProviderAccordion
+                    key={group.id}
+                    group={group}
+                    expanded={expandedProviders.has(group.id)}
+                    current={props.current}
+                    canToggleProvider={!!props.onToggleProvider}
+                    onToggleExpand={() => toggleProvider(group.id)}
+                    onToggleProvider={props.onToggleProvider}
+                    onSelect={handleSelect}
+                    onOpenSettings={props.onOpenSettings}
+                    organizationProviderLabel={organizationProviderLabel}
+                  />
+                ))}
+                {filteredCliAgents.length > 0 ? (
+                  <CliAgentList
+                    agents={filteredCliAgents}
+                    current={props.current}
+                    onSelect={props.onSelect}
+                  />
+                ) : null}
+              </>
             )}
           </div>
         </div>
@@ -468,6 +497,7 @@ function ProviderAccordion({
   onToggleExpand,
   onToggleProvider,
   onSelect,
+  onOpenSettings,
   organizationProviderLabel,
 }: {
   group: ProviderGroup;
@@ -477,6 +507,7 @@ function ProviderAccordion({
   onToggleExpand: () => void;
   onToggleProvider?: (providerId: string, enabled: boolean) => void;
   onSelect: (opt: ModelOption) => void;
+  onOpenSettings: () => void;
   organizationProviderLabel: string;
 }) {
   const totalModels = group.recommended.length + group.other.length;
@@ -507,6 +538,9 @@ function ProviderAccordion({
             ) : null}
             {group.isCloud ? (
               <span className="rounded-md bg-blue-3/50 px-1.5 py-0.5 text-[10px] font-medium text-blue-11/70">{organizationProviderLabel}</span>
+            ) : null}
+            {!group.isConnected ? (
+              <span className="rounded-md bg-amber-3 px-1.5 py-0.5 text-[10px] font-medium text-amber-11">Not connected</span>
             ) : null}
             {group.hasCurrent ? (
               <span className="rounded-md bg-green-3 px-1.5 py-0.5 text-[10px] font-medium text-green-11">Current</span>
@@ -539,7 +573,15 @@ function ProviderAccordion({
                 Recommended
               </div>
               {group.recommended.map((opt) => (
-                <DefaultModelRow key={opt.modelID} opt={opt} current={current} onSelect={onSelect} recommended />
+                <DefaultModelRow
+                  key={opt.modelID}
+                  opt={opt}
+                  current={current}
+                  onSelect={onSelect}
+                  isConnected={group.isConnected}
+                  onOpenSettings={onOpenSettings}
+                  recommended
+                />
               ))}
             </>
           ) : null}
@@ -551,7 +593,14 @@ function ProviderAccordion({
                 </div>
               ) : null}
               {group.other.map((opt) => (
-                <DefaultModelRow key={opt.modelID} opt={opt} current={current} onSelect={onSelect} />
+                <DefaultModelRow
+                  key={opt.modelID}
+                  opt={opt}
+                  current={current}
+                  onSelect={onSelect}
+                  isConnected={group.isConnected}
+                  onOpenSettings={onOpenSettings}
+                />
               ))}
             </>
           ) : null}
@@ -566,11 +615,12 @@ function ProviderAccordion({
 /* ------------------------------------------------------------------ */
 
 function DefaultModelRow({
-  opt, current, onSelect, recommended,
+  opt, current, onSelect, recommended, isConnected, onOpenSettings,
 }: {
-  opt: ModelOption; current: ModelRef; onSelect: (opt: ModelOption) => void; recommended?: boolean;
+  opt: ModelOption; current: ModelRef; onSelect: (opt: ModelOption) => void; recommended?: boolean; isConnected?: boolean; onOpenSettings?: () => void;
 }) {
   const active = modelEquals(current, { providerID: opt.providerID, modelID: opt.modelID });
+  const notConnected = isConnected === false;
 
   return (
     <button
@@ -579,14 +629,89 @@ function DefaultModelRow({
         "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors",
         active ? "bg-green-3/50" : "hover:bg-dls-hover",
       ].join(" ")}
-      onClick={() => onSelect(opt)}
+      onClick={() => {
+        // 未连接的 provider：点击引导去连接，而不是选中一个选不中的模型
+        if (notConnected && onOpenSettings) {
+          onOpenSettings();
+          return;
+        }
+        onSelect(opt);
+      }}
+      title={notConnected ? "Provider not connected — open settings to connect" : undefined}
     >
       {recommended ? <Star size={12} className="shrink-0 text-amber-9" /> : <div className="w-3 shrink-0" />}
       <div className="min-w-0 flex-1">
         <span className={["text-[12px]", active ? "font-medium text-dls-text" : "text-dls-text"].join(" ")}>{opt.title}</span>
         <span className="ml-2 font-mono text-[10px] text-dls-secondary/60">{opt.modelID}</span>
       </div>
-      {active ? <Check size={14} className="shrink-0 text-green-11" /> : null}
+      {notConnected ? (
+        <span className="shrink-0 rounded-md bg-amber-3 px-1.5 py-0.5 text-[10px] font-medium text-amber-11">Not connected</span>
+      ) : active ? <Check size={14} className="shrink-0 text-green-11" /> : null}
     </button>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  CLI agents group (all models): local CLI agents, sorted by         */
+/*  confidence (server-side), click to select their default model      */
+/* ------------------------------------------------------------------ */
+
+function CliAgentList({
+  agents,
+  current,
+  onSelect,
+}: {
+  agents: CliAgentItem[];
+  current: ModelRef;
+  onSelect: (model: ModelRef) => void;
+}) {
+  return (
+    <div className="pt-2">
+      <div className="flex items-center gap-2 px-3 pb-1 pt-2">
+        <span className="text-[13px] font-medium text-dls-text">CLI Agents</span>
+        <span className="text-[11px] text-dls-secondary">
+          {agents.length} installed on this machine
+        </span>
+      </div>
+      <div className="space-y-0.5">
+        {agents.map((agent) => {
+          const active = agent.defaultModel ? modelEquals(current, agent.defaultModel) : false;
+          const confidence = agent.confidence != null ? Math.round(agent.confidence * 100) : null;
+          return (
+            <button
+              key={agent.agentId}
+              type="button"
+              className={[
+                "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors",
+                active ? "bg-green-3/50" : "hover:bg-dls-hover",
+              ].join(" ")}
+              onClick={() => {
+                if (agent.defaultModel) onSelect(agent.defaultModel);
+              }}
+              title={
+                agent.defaultModel
+                  ? `Select ${agent.label} (${agent.defaultModel.modelID})`
+                  : `${agent.label} — no default model`
+              }
+            >
+              <div className="min-w-0 flex-1">
+                <span className="text-[12px] font-medium text-dls-text">{agent.label}</span>
+                <span className="ml-2 font-mono text-[10px] text-dls-secondary/60">{agent.agentId}</span>
+              </div>
+              <span className="flex shrink-0 items-center gap-1">
+                {agent.vendor ? (
+                  <span className="rounded-md bg-dls-hover px-1.5 py-0.5 text-[10px] font-medium text-dls-secondary">{agent.vendor}</span>
+                ) : null}
+                <span className="rounded-md bg-dls-hover px-1.5 py-0.5 font-mono text-[10px] font-medium text-dls-secondary">{agent.protocol}</span>
+                {confidence != null ? (
+                  <span className="rounded-md bg-blue-3 px-1.5 py-0.5 text-[10px] font-medium text-blue-11">{confidence}%</span>
+                ) : null}
+              </span>
+              {active ? <Check size={14} className="shrink-0 text-green-11" /> : null}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

@@ -415,6 +415,8 @@ export type ModelOption = {
   isRecommended?: boolean;
   /** "cloud" for org-managed providers (lpr_*), undefined for local. */
   source?: "cloud";
+  /** Provider 是否已连接（all models 罗列未连接 provider 时标记）。 */
+  connected?: boolean;
 };
 
 export type SelectedSessionSnapshot = {

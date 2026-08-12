@@ -100,6 +100,7 @@ import { useSessionActivityStore } from "@/react-app/domains/session/status/sess
 import { buildOpenworkEnvSystemContext } from "@/react-app/domains/session/sync/env-context";
 import {
   applySessionRevert,
+  snapshotKey as reactSnapshotKey,
 } from "@/react-app/domains/session/sync/session-sync";
 import { firstLineLocalFileParts, joinWorkspaceRelativePath, toFileUrl } from "@/react-app/domains/session/sync/prompt-file-parts";
 import { composerAttachmentsToWorkspaceFileParts } from "@/react-app/domains/session/sync/attachment-file-part";
@@ -881,6 +882,7 @@ export function SessionRoute() {
     client: opencodeClient,
     baseUrl: opencodeBaseUrl,
     workspaceRoot: selectedWorkspaceRoot,
+    openworkServerClient: selectedWorkspaceEndpoint?.client ?? client,
     onOpen: handleModelPickerOpen,
   });
   // Which session the open model picker targets. Selecting a model while a
@@ -1260,6 +1262,13 @@ export function SessionRoute() {
             });
             if (result.error) {
               throw new Error(serializeSDKError(result.error));
+            }
+            // CLI agent 会话：prompt 由 server 拦截真实执行（结果写入 server store），
+            // 这里主动失效 snapshot 查询，让 transcript 拉到 CLI 执行的完整会话。
+            if (selectedAgent) {
+              getReactQueryClient().invalidateQueries({
+                queryKey: reactSnapshotKey(selectedWorkspaceId, targetSessionId),
+              });
             }
             // Remember what this conversation used last so returning to it
             // (or splitting it beside another session) keeps its own model.
@@ -2420,6 +2429,8 @@ export function SessionRoute() {
       }}
       onOpenSettings={() => handleOpenSettings("/settings/general")}
       onOpenExtensions={() => handleOpenExtensions()}
+      onOpenSpaces={() => navigate("/space")}
+      onOpenAdmin={() => navigate("/admin")}
       onOpenProviderAuth={handleOpenProviderAuth}
       onChatFirstTask={handleChatFirstTask}
       chatFirstBusy={createWorkspaceBusy}

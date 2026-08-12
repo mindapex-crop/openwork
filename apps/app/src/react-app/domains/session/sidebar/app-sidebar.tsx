@@ -24,6 +24,8 @@ import {
   FolderOpen,
   Tag,
   X,
+  Boxes,
+  LayoutDashboard,
 } from "lucide-react";
 import { LazyMotion, Reorder, domMax, m, useDragControls } from "motion/react";
 
@@ -855,6 +857,10 @@ export type AppSidebarProps = {
   onStartResize?: React.PointerEventHandler<HTMLButtonElement>;
   onOpenAccountSettings?: () => void;
   onOpenExtensions: () => void;
+  /** Opens the Spaces workspace panel (/space). */
+  onOpenSpaces?: () => void;
+  /** Opens the admin console (/admin). */
+  onOpenAdmin?: () => void;
   extensionsActive?: boolean;
   /** Live app status, shown inside the footer account menu. */
   status: Omit<AccountStatusMenuProps, "onOpenAccountSettings">;
@@ -872,6 +878,43 @@ function useSessionTree(
 
 function isSessionActivityStatus(status: string | undefined): status is SessionActivityStatus {
   return status === "idle" || status === "thinking" || status === "responding" || status === "error" || status === "compacting" || status === "waiting";
+}
+
+// Codex-style thread buckets: Today / Yesterday / Previous 7 Days / Older.
+type ThreadDateBucketKey = "today" | "yesterday" | "last7" | "older";
+
+function threadDateBucketKey(timestamp: number | null | undefined): ThreadDateBucketKey | null {
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) return null;
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 86_400_000;
+  const startOfLast7 = startOfToday - 7 * 86_400_000;
+  if (timestamp >= startOfToday) return "today";
+  if (timestamp >= startOfYesterday) return "yesterday";
+  if (timestamp >= startOfLast7) return "last7";
+  return "older";
+}
+
+function threadDateBucketLabel(bucket: ThreadDateBucketKey) {
+  switch (bucket) {
+    case "today":
+      return "Today";
+    case "yesterday":
+      return "Yesterday";
+    case "last7":
+      return "Previous 7 Days";
+    case "older":
+      return "Older";
+  }
+}
+
+function ThreadDateSeparator({ label }: { label: string }) {
+  return (
+    <div className={cn("flex items-center gap-2 px-2 pb-0.5 pt-2", SIDEBAR_SECTION_LANE)}>
+      <span className={cn("flex-1 truncate", SIDEBAR_SECTION_LABEL)}>{label}</span>
+      <span className="h-px flex-1 bg-sidebar-border/50" />
+    </div>
+  );
 }
 
 export function AppSidebar(props: AppSidebarProps) {
@@ -1129,6 +1172,22 @@ export function AppSidebar(props: AppSidebarProps) {
               label={t("settings.tab_extensions")}
               onSelect={props.onOpenExtensions}
             />
+            {props.onOpenSpaces ? (
+              <SidebarDestination
+                active={false}
+                icon={Boxes}
+                label="Spaces"
+                onSelect={props.onOpenSpaces}
+              />
+            ) : null}
+            {props.onOpenAdmin ? (
+              <SidebarDestination
+                active={false}
+                icon={LayoutDashboard}
+                label="Admin"
+                onSelect={props.onOpenAdmin}
+              />
+            ) : null}
           </SidebarMenu>
         </SidebarHeader>
         <SidebarSplitPill
@@ -1423,6 +1482,7 @@ function WorkspaceHeader({
   return (
     <SidebarMenuButton
       {...props}
+      render={<div />}
       className={cn(
         "gap-2 group-hover/workspace-header:bg-sidebar-accent group-hover/workspace-header:text-sidebar-accent-foreground mac:group-hover/workspace-header:bg-black/5 dark:mac:group-hover/workspace-header:bg-white/10",
         statusLabel && "h-10",
@@ -1656,18 +1716,32 @@ function WorkspaceSidebarGroup({
                         }}
                         className="flex flex-col gap-1"
                       >
-                        {sessionRows.map((row) => (
-                          <SessionMenuItem
-                            key={row.session.id}
-                            session={row.session}
-                            depth={row.depth}
-                            tree={tree}
-                            workspaceId={workspace.id}
-                            forcedExpandedSessionIds={forcedExpandedSessionIds}
-                            isPinned={pinnedIds.has(row.session.id)}
-                            draggable={row.depth === 0}
-                          />
-                        ))}
+                        {(() => {
+                          let lastBucket: ThreadDateBucketKey | null = null;
+                          return sessionRows.map((row) => {
+                            const bucket = row.depth === 0
+                              ? threadDateBucketKey(row.session.time?.updated ?? row.session.time?.created)
+                              : null;
+                            const showSeparator = bucket !== null && bucket !== lastBucket;
+                            if (bucket !== null) lastBucket = bucket;
+                            return (
+                              <React.Fragment key={row.session.id}>
+                                {showSeparator ? (
+                                  <ThreadDateSeparator label={threadDateBucketLabel(bucket)} />
+                                ) : null}
+                                <SessionMenuItem
+                                  session={row.session}
+                                  depth={row.depth}
+                                  tree={tree}
+                                  workspaceId={workspace.id}
+                                  forcedExpandedSessionIds={forcedExpandedSessionIds}
+                                  isPinned={pinnedIds.has(row.session.id)}
+                                  draggable={row.depth === 0}
+                                />
+                              </React.Fragment>
+                            );
+                          });
+                        })()}
                       </Reorder.Group>
                     )}
                     {wsGroups.length === 0 && activeRootCount > previewCount ? (

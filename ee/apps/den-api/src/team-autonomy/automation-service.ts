@@ -177,6 +177,7 @@ export type AdvanceRunInput = {
 export type AdvanceRunResult =
   | { ok: true; run: RunRow; previousStatus: AutomationStateValue; degradationLevel?: DegradationLevelValue }
   | { ok: false; status: 409; response: { code: "INVALID_TRANSITION"; from: AutomationStateValue; to: AutomationStateValue } }
+  | { ok: false; status: 402; response: { code: "BUDGET_EXCEEDED"; maxCostCentsPerRun: number; costCents: number } }
   | { ok: false; status: 404; response: { code: "NOT_FOUND"; message: string } }
 
 export type FailRunInput = {
@@ -304,7 +305,160 @@ export function decideRetry(
 }
 
 // ============================================================
-// 纯函数：Cron 解析 — 无需 DB，可单测
+// 纯函数：qualityGate 质量门校验 — 无需 DB，可单测
+// WorkBuddy Ch25 质量门禁：相关性 / 时效性 / 重复性 / 最低数量
+// ============================================================
+
+export type QualityGate = {
+  // 最低数量：item 数必须 >= 该值
+  min_item_count?: number
+  // 去重键：items 按这些字段去重后的数量必须 >= min_item_count
+  dedupe_keys?: string[]
+  // 时效性：抓取时间距今不得超过 fresh_hours
+  fresh_hours?: number
+  // 相关性：items 文本必须命中至少一个关键词
+  relevance_terms?: string[]
+}
+
+export type QualityGateInput = {
+  items?: Array<Record<string, unknown>>
+  fetched_at?: string | Date
+}
+
+export type QualityVerdict = {
+  pass: boolean
+  reasons: string[]
+}
+
+export function evaluateQualityGate(
+  gate: QualityGate | Record<string, unknown> | null | undefined,
+  input: QualityGateInput,
+): QualityVerdict {
+  if (!gate) return { pass: true, reasons: [] }
+  const reasons: string[] = []
+  const items = input.items ?? []
+
+  // 最低数量
+  if (typeof gate.min_item_count === "number" && items.length < gate.min_item_count) {
+    reasons.push(`min_item_count: expected >= ${gate.min_item_count}, got ${items.length}`)
+  }
+
+  // 去重（重复性）：按 dedupe_keys 去重后数量仍必须 >= min_item_count（若有）
+  if (Array.isArray(gate.dedupe_keys) && gate.dedupe_keys.length > 0) {
+    const seen = new Set<string>()
+    let uniqueCount = 0
+    for (const item of items) {
+      const key = gate.dedupe_keys.map((k) => String(item?.[k] ?? "")).join("\u0000")
+      if (!seen.has(key)) {
+        seen.add(key)
+        uniqueCount++
+      }
+    }
+    if (typeof gate.min_item_count === "number" && uniqueCount < gate.min_item_count) {
+      reasons.push(`dedupe_keys: ${uniqueCount} unique < min_item_count ${gate.min_item_count}`)
+    }
+  }
+
+  // 时效性：fetched_at 距今不超过 fresh_hours
+  if (typeof gate.fresh_hours === "number" && input.fetched_at) {
+    const fetched = new Date(input.fetched_at)
+    const ageHours = (Date.now() - fetched.getTime()) / 3_600_000
+    if (ageHours > gate.fresh_hours) {
+      reasons.push(`fresh_hours: fetched ${ageHours.toFixed(1)}h ago > ${gate.fresh_hours}h`)
+    }
+  }
+
+  // 相关性：items 序列化文本命中至少一个关键词
+  if (Array.isArray(gate.relevance_terms) && gate.relevance_terms.length > 0 && items.length > 0) {
+    const haystack = items.map((i) => JSON.stringify(i)).join("\n").toLowerCase()
+    const hit = gate.relevance_terms.some((term) => haystack.includes(String(term).toLowerCase()))
+    if (!hit) {
+      reasons.push(`relevance_terms: no item matches any of ${gate.relevance_terms.join(", ")}`)
+    }
+  }
+
+  return { pass: reasons.length === 0, reasons }
+}
+
+// ============================================================
+// 纯函数：scopedApprovals 免审批范围判定 — 无需 DB，可单测
+// 自动化免审批范围（standing rule scoped to this automation）
+// ============================================================
+
+export type ScopedApprovalRule = {
+  // 免审批的工具名白名单（如 ["filesystem_write", "shell_execute"]）
+  approve_tools?: string[]
+  // 免审批的动作名白名单
+  approve_actions?: string[]
+  // 每日自动批准上限（超过则转人工审批）
+  max_auto_approvals_per_day?: number
+}
+
+export type ScopedApprovalRequest = {
+  toolName?: string
+  action?: string
+  // 当日已自动批准次数（service 层统计传入）
+  approvedToday?: number
+}
+
+export type ScopedApprovalDecision = {
+  approved: boolean
+  reason: "scoped_rule" | "quota_exceeded" | "not_scoped"
+}
+
+export function decideScopedApproval(
+  rule: ScopedApprovalRule | Record<string, unknown> | null | undefined,
+  request: ScopedApprovalRequest,
+): ScopedApprovalDecision {
+  if (!rule) return { approved: false, reason: "not_scoped" }
+  const tools = Array.isArray(rule.approve_tools) ? rule.approve_tools : []
+  const actions = Array.isArray(rule.approve_actions) ? rule.approve_actions : []
+
+  const toolHit = request.toolName ? tools.includes(request.toolName) : false
+  const actionHit = request.action ? actions.includes(request.action) : false
+  if (!toolHit && !actionHit) return { approved: false, reason: "not_scoped" }
+
+  // 命中白名单但已达每日上限 → 转人工
+  if (typeof rule.max_auto_approvals_per_day === "number" &&
+      rule.max_auto_approvals_per_day > 0 &&
+      (request.approvedToday ?? 0) >= rule.max_auto_approvals_per_day) {
+    return { approved: false, reason: "quota_exceeded" }
+  }
+
+  return { approved: true, reason: "scoped_rule" }
+}
+
+// ============================================================
+// 纯函数：max_cost_cents_per_run 预算检查 — 无需 DB，可单测
+// ============================================================
+
+export function checkCostBudget(
+  costCents: number | undefined,
+  maxCostCentsPerRun: number | null | undefined,
+): { ok: boolean; exceededByCents?: number } {
+  if (costCents === undefined || costCents === null) return { ok: true }
+  if (maxCostCentsPerRun === null || maxCostCentsPerRun === undefined) return { ok: true }
+  if (costCents <= maxCostCentsPerRun) return { ok: true }
+  return { ok: false, exceededByCents: costCents - maxCostCentsPerRun }
+}
+
+// ============================================================
+// 纯函数：deliveryTargets 投递幂等键 — 无需 DB，可单测
+// ============================================================
+
+export type DeliveryTarget = {
+  kind: string
+  target: string
+  idempotency_key?: string
+  enabled?: boolean
+}
+
+export function deliveryIdempotencyKey(target: DeliveryTarget, batchId: string): string {
+  return target.idempotency_key ? `${target.idempotency_key}:${batchId}` : `${target.kind}:${target.target}:${batchId}`
+}
+
+// ============================================================
+// Cron 解析 — 无需 DB，可单测
 // ============================================================
 
 export type ParsedCron = {
@@ -373,23 +527,41 @@ function matchesCron(parsed: ParsedCron, date: Date): boolean {
   )
 }
 
-// 简单时区偏移映射（仅支持常见 UTC 偏移；完整 IANA 支持需引入 luxon）
-const TZ_OFFSET_HOURS: Record<string, number> = {
-  "Asia/Shanghai": 8,
-  "Asia/Tokyo": 9,
-  "Asia/Singapore": 8,
-  "UTC": 0,
-  "America/Los_Angeles": -8,
-  "America/New_York": -5,
-  "Europe/London": 0,
+// 完整 IANA 时区支持：用 Node 内置 Intl.DateTimeFormat 计算任意 IANA 时区
+// 在指定时刻的 UTC 偏移（含 DST），替换原静态 TZ_OFFSET_HOURS 表（仅支持常见时区）。
+// 按 UTC 日缓存偏移，DST 切换日最多误差 1 小时（可接受边缘情况）。
+
+const tzOffsetCache = new Map<string, { dateKey: string; offsetMs: number }>()
+
+export function getTimezoneOffsetMs(timeZone: string, date: Date): number {
+  const dateKey = date.toISOString().slice(0, 10)
+  const cached = tzOffsetCache.get(timeZone)
+  if (cached && cached.dateKey === dateKey) return cached.offsetMs
+
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  })
+  const parts = dtf.formatToParts(date)
+  const get = (type: string): number => Number(parts.find((p) => p.type === type)?.value ?? "0")
+  const asUTC = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"))
+  const offsetMs = asUTC - date.getTime()
+  tzOffsetCache.set(timeZone, { dateKey, offsetMs })
+  return offsetMs
 }
 
 export function computeNextRunAt(cron: string, from: Date, timezone: string = "Asia/Shanghai"): Date {
   const parsed = parseCronExpr(cron)
-  const offsetHours = TZ_OFFSET_HOURS[timezone] ?? 0
+  const offsetMs = getTimezoneOffsetMs(timezone, from)
 
   // 把 from 转换到目标时区的"本地时间"（用 UTC 方法操作）
-  const shiftedMs = from.getTime() + offsetHours * 60 * 60 * 1000
+  const shiftedMs = from.getTime() + offsetMs
   const search = new Date(shiftedMs)
   // 从下一分钟开始搜索
   search.setUTCSeconds(0, 0)
@@ -400,7 +572,7 @@ export function computeNextRunAt(cron: string, from: Date, timezone: string = "A
   for (let i = 0; i < maxIterations; i++) {
     if (matchesCron(parsed, search)) {
       // 转回 UTC
-      return new Date(search.getTime() - offsetHours * 60 * 60 * 1000)
+      return new Date(search.getTime() - offsetMs)
     }
     search.setUTCMinutes(search.getUTCMinutes() + 1)
   }
@@ -930,6 +1102,28 @@ export async function advanceRun(
     }
   }
 
+  // 预算检查：run.costCents 超过 automation.max_cost_cents_per_run → 402 BUDGET_EXCEEDED
+  if (input.costCents !== undefined && input.costCents !== null) {
+    const budgetRows = await db
+      .select({ maxCostCentsPerRun: TeamAutomationTable.max_cost_cents_per_run })
+      .from(TeamAutomationTable)
+      .where(eq(TeamAutomationTable.id, normalizeDenTypeId("teamAutomation", current.automationId)))
+      .limit(1)
+    const maxCents = budgetRows[0]?.maxCostCentsPerRun ?? null
+    const budget = checkCostBudget(input.costCents, maxCents)
+    if (!budget.ok) {
+      return {
+        ok: false,
+        status: 402,
+        response: {
+          code: "BUDGET_EXCEEDED",
+          maxCostCentsPerRun: maxCents as number,
+          costCents: input.costCents,
+        },
+      }
+    }
+  }
+
   // 计算降级级别（若提供 sourceStatus）
   let degradationLevel: DegradationLevelValue | undefined
   if (input.sourceStatus) {
@@ -1337,4 +1531,210 @@ export async function scheduleNextRun(automationId: string, from: Date = new Dat
   } catch {
     // cron 解析失败，不更新
   }
+}
+
+// ============================================================
+// scopedApprovals 审批工作流（schema 已就绪 → service 实现）
+// 免审批范围判定 + 当日自动批准次数统计（quota 控制）
+// ============================================================
+
+export type CheckScopedApprovalResult =
+  | { ok: true; approved: boolean; reason: ScopedApprovalDecision["reason"]; approvedToday: number }
+  | { ok: false; status: 404; response: { code: "NOT_FOUND"; message: string } }
+
+export async function checkScopedApproval(
+  automationId: string,
+  request: ScopedApprovalRequest,
+): Promise<CheckScopedApprovalResult> {
+  const parsedId = parseDenTypeId("teamAutomation", automationId)
+  if (!parsedId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `automation ${automationId} not found` },
+    }
+  }
+  const rows = await db
+    .select()
+    .from(TeamAutomationTable)
+    .where(eq(TeamAutomationTable.id, parsedId))
+    .limit(1)
+  if (!rows[0]) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `automation ${automationId} not found` },
+    }
+  }
+
+  const rule = (rows[0].scoped_approvals as ScopedApprovalRule | null) ?? null
+  // 当日已自动批准次数：统计今日 started_at 且 state.scoped_approved=true 的 run
+  const todayStart = new Date()
+  todayStart.setUTCHours(0, 0, 0, 0)
+  const approvedRuns = await db
+    .select({ state: TeamAutomationRunTable.state })
+    .from(TeamAutomationRunTable)
+    .where(
+      and(
+        eq(TeamAutomationRunTable.automation_id, parsedId),
+        sql`${TeamAutomationRunTable.started_at} >= ${todayStart}`,
+      ),
+    )
+  const approvedToday = approvedRuns.filter(
+    (r: { state: unknown }) => (r.state as { scoped_approved?: boolean } | null)?.scoped_approved === true,
+  ).length
+
+  const decision = decideScopedApproval(rule, { ...request, approvedToday })
+  return { ok: true, approved: decision.approved, reason: decision.reason, approvedToday }
+}
+
+// ============================================================
+// qualityGate 质量门校验（schema 已就绪 → service 实现）
+// ============================================================
+
+export type EvaluateQualityForAutomationResult =
+  | { ok: true; gateConfigured: boolean; verdict: QualityVerdict }
+  | { ok: false; status: 404; response: { code: "NOT_FOUND"; message: string } }
+
+export async function evaluateQualityForAutomation(
+  automationId: string,
+  input: QualityGateInput,
+): Promise<EvaluateQualityForAutomationResult> {
+  const parsedId = parseDenTypeId("teamAutomation", automationId)
+  if (!parsedId) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `automation ${automationId} not found` },
+    }
+  }
+  const rows = await db
+    .select()
+    .from(TeamAutomationTable)
+    .where(eq(TeamAutomationTable.id, parsedId))
+    .limit(1)
+  if (!rows[0]) {
+    return {
+      ok: false,
+      status: 404,
+      response: { code: "NOT_FOUND", message: `automation ${automationId} not found` },
+    }
+  }
+  const gate = (rows[0].quality_gate as QualityGate | null) ?? null
+  if (!gate) return { ok: true, gateConfigured: false, verdict: { pass: true, reasons: [] } }
+  return { ok: true, gateConfigured: true, verdict: evaluateQualityGate(gate, input) }
+}
+
+// ============================================================
+// deliveryTargets 多渠道投递（schema 已就绪 → service 实现）
+// handler 注册表 + 幂等记录（run.state.delivered_targets）
+// ============================================================
+
+export type DeliveryPayload = {
+  batchId: string
+  title?: string
+  content: unknown
+}
+
+export type DeliveryHandlerResult = { ok: boolean; error?: string }
+
+export type DeliveryHandlerContext = {
+  target: DeliveryTarget
+  payload: DeliveryPayload
+  automation: AutomationRow
+  run: RunRow
+}
+
+export type DeliveryHandler = (ctx: DeliveryHandlerContext) => Promise<DeliveryHandlerResult>
+
+const deliveryHandlers = new Map<string, DeliveryHandler>()
+
+export function registerDeliveryHandler(kind: string, handler: DeliveryHandler): void {
+  deliveryHandlers.set(kind, handler)
+}
+
+export function deliveryHandlerFor(kind: string): DeliveryHandler | undefined {
+  return deliveryHandlers.get(kind)
+}
+
+export type DeliverRunResultsResult = {
+  delivered: string[]
+  skipped: string[]
+  failed: Array<{ key: string; error: string }>
+}
+
+export async function deliverRunResults(
+  runId: string,
+  payload: DeliveryPayload,
+): Promise<DeliverRunResultsResult> {
+  const parsedRunId = parseDenTypeId("teamAutomationRun", runId)
+  if (!parsedRunId) {
+    return { delivered: [], skipped: [], failed: [{ key: runId, error: "invalid run id" }] }
+  }
+  const runRows = await db
+    .select()
+    .from(TeamAutomationRunTable)
+    .where(eq(TeamAutomationRunTable.id, parsedRunId))
+    .limit(1)
+  if (!runRows[0]) {
+    return { delivered: [], skipped: [], failed: [{ key: runId, error: "run not found" }] }
+  }
+  const run = rowToRun(runRows[0])
+
+  const autoRows = await db
+    .select()
+    .from(TeamAutomationTable)
+    .where(eq(TeamAutomationTable.id, normalizeDenTypeId("teamAutomation", run.automationId)))
+    .limit(1)
+  if (!autoRows[0]) {
+    return { delivered: [], skipped: [], failed: [{ key: run.automationId, error: "automation not found" }] }
+  }
+  const automation = rowToAutomation(autoRows[0])
+  const targets: DeliveryTarget[] = (automation.deliveryTargets ?? []) as DeliveryTarget[]
+  if (targets.length === 0) {
+    return { delivered: [], skipped: [], failed: [] }
+  }
+
+  const state = (run.state as { delivered_targets?: string[] } | null) ?? {}
+  const alreadyDelivered = new Set(state.delivered_targets ?? [])
+  const delivered: string[] = []
+  const skipped: string[] = []
+  const failed: Array<{ key: string; error: string }> = []
+
+  for (const target of targets) {
+    if (target.enabled === false) {
+      skipped.push(deliveryIdempotencyKey(target, run.batchId))
+      continue
+    }
+    const key = deliveryIdempotencyKey(target, run.batchId)
+    if (alreadyDelivered.has(key)) {
+      skipped.push(key)
+      continue
+    }
+    const handler = deliveryHandlerFor(target.kind)
+    if (!handler) {
+      failed.push({ key, error: `no delivery handler registered for kind "${target.kind}"` })
+      continue
+    }
+    try {
+      const result = await handler({ target, payload, automation, run })
+      if (result.ok) {
+        alreadyDelivered.add(key)
+        delivered.push(key)
+      } else {
+        failed.push({ key, error: result.error ?? "delivery failed" })
+      }
+    } catch (error) {
+      failed.push({ key, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  if (delivered.length > 0 || failed.length > 0) {
+    await db
+      .update(TeamAutomationRunTable)
+      .set({ state: { ...state, delivered_targets: [...alreadyDelivered] } })
+      .where(eq(TeamAutomationRunTable.id, parsedRunId))
+  }
+
+  return { delivered, skipped, failed }
 }

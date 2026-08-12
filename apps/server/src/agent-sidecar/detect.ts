@@ -12,6 +12,7 @@ import { access, constants } from "node:fs/promises";
 import { dirname as pathDirname, join } from "node:path";
 import { AGENT_PRESETS, type AgentPreset } from "./presets.js";
 import type { AgentDetectResult } from "./types.js";
+import { restoreRealHomeEnv } from "./home-env.js";
 
 /** 系统默认 PATH（避免父进程污染） */
 const DEFAULT_SYSTEM_PATH = [
@@ -46,9 +47,46 @@ export function resolveCleanPath(customPath?: string): string {
 }
 
 /**
+ * 常见工具安装目录（PATH 之外也枚举，覆盖"装了但不在 PATH"的 agent）
+ *
+ * 各 CLI agent 的惯例安装位置：
+ * - $HOME/.local/bin（curl/npm 脚本安装约定）
+ * - npm 全局 bin（.npm-global/bin、npm-global/bin）
+ * - $HOME/.bun/bin、$HOME/.cargo/bin（bun/cargo 安装约定）
+ * - 各 agent 自带 bin 目录（kimi-code / opencode / trae / goose / codex / claude / gemini）
+ */
+export function getExtraSearchDirs(): string[] {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  if (!home) return [];
+  const dirs = new Set<string>();
+  dirs.add(join(home, ".local", "bin"));
+  dirs.add(join(home, ".npm-global", "bin"));
+  dirs.add(join(home, "npm-global", "bin"));
+  dirs.add(join(home, ".bun", "bin"));
+  dirs.add(join(home, ".cargo", "bin"));
+  dirs.add(join(home, ".kimi-code", "bin")); // kimi
+  dirs.add(join(home, ".opencode", "bin")); // opencode
+  dirs.add(join(home, ".trae", "bin")); // trae-cli
+  dirs.add(join(home, ".goose", "bin")); // goose
+  dirs.add(join(home, ".codex", "bin")); // codex
+  dirs.add(join(home, ".claude", "bin")); // claude-code
+  dirs.add(join(home, ".gemini", "bin")); // gemini-cli
+  dirs.add(join(home, ".local", "share", "aider", "bin")); // aider
+  dirs.add(join(home, ".local", "share", "openhands")); // openhands
+  return [...dirs];
+}
+
+/**
  * 在 PATH 中查找可执行文件
  */
 export async function findBinaryInPath(binary: string, path: string): Promise<string | null> {
+  return findBinaryInDirs(binary, path.split(":").filter(Boolean));
+}
+
+/**
+ * 在指定目录列表中查找可执行文件
+ */
+export async function findBinaryInDirs(binary: string, dirs: string[]): Promise<string | null> {
   if (!binary) return null;
   // 绝对路径直接验证
   if (binary.startsWith("/")) {
@@ -59,7 +97,6 @@ export async function findBinaryInPath(binary: string, path: string): Promise<st
       return null;
     }
   }
-  const dirs = path.split(":").filter(Boolean);
   for (const dir of dirs) {
     const candidate = join(dir, binary);
     try {
@@ -81,9 +118,13 @@ export async function getAgentVersion(
   env?: Record<string, string>,
 ): Promise<string | undefined> {
   return new Promise((resolve) => {
+    const homeOverride = restoreRealHomeEnv();
     const child = spawn(binaryPath, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...env },
+      // 注入真实 HOME：探测命令也会触发 agent 启动初始化（如 trae-cli 的
+      // keyring 支持检查会写 test-key-<时间戳>），隔离 HOME 下找不到
+      // login.keychain-db 会触发系统弹窗
+      env: { ...process.env, ...homeOverride, ...env },
       timeout: 5000,
     });
     let output = "";
@@ -120,20 +161,36 @@ export async function detectAgent(
     };
   }
   try {
-    const binaryPath = await findBinaryInPath(binary, cleanPath);
+    // 深度遍历：先 PATH，再常见安装目录（覆盖"装了但不在 PATH"的 agent，
+    // 如 ~/.kimi-code/bin、~/.local/bin、npm 全局 bin 等）
+    const pathDirs = cleanPath.split(":").filter(Boolean);
+    const binaryPath =
+      (await findBinaryInDirs(binary, pathDirs)) ??
+      (await findBinaryInDirs(binary, getExtraSearchDirs()));
     if (!binaryPath) {
       return {
         agentId: preset.agentId,
         available: false,
-        error: `Binary '${binary}' not found in PATH`,
+        error: `Binary '${binary}' not found in PATH or common install dirs`,
       };
     }
+    // 置信度：preset 显式绝对路径 > PATH 命中 > 常见安装目录命中；
+    // --version 成功解析出版本号再 +0.15（上限 1.0）
+    let confidence: number;
+    if (binary.startsWith("/")) {
+      confidence = 0.95;
+    } else {
+      const inPath = pathDirs.some((dir) => binaryPath.startsWith(dir + "/"));
+      confidence = inPath ? 0.85 : 0.7;
+    }
     const version = await getAgentVersion(binaryPath).catch(() => undefined);
+    if (version) confidence = Math.min(1, confidence + 0.15);
     return {
       agentId: preset.agentId,
       available: true,
       binaryPath,
       version,
+      confidence,
     };
   } catch (error) {
     return {
@@ -162,6 +219,11 @@ export async function detectAllAgents(customPath?: string): Promise<AgentDetectR
     const batchResults = await Promise.all(batch.map((p) => detectAgent(p, customPath)));
     results.push(...batchResults);
   }
+  // 按置信度排序：available 优先，可用 agent 内 confidence 降序
+  results.sort((a, b) => {
+    if (a.available !== b.available) return a.available ? -1 : 1;
+    return (b.confidence ?? 0) - (a.confidence ?? 0);
+  });
   return results;
 }
 

@@ -191,6 +191,10 @@ export type SessionPageProps = {
   onSendFeedback: () => void;
   onOpenSettings: () => void;
   onOpenExtensions: () => void;
+  /** Opens the Spaces workspace panel (/space). */
+  onOpenSpaces?: () => void;
+  /** Opens the admin console (/admin). */
+  onOpenAdmin?: () => void;
   sidebar: SessionPageSidebarProps;
   surface?: SessionPageSurfaceProps | null;
   history?: SessionPageHistoryControls | null;
@@ -1061,6 +1065,8 @@ export function SessionPage(props: SessionPageProps) {
           onStartResize={startLeftSidebarResize}
           onOpenAccountSettings={props.onOpenSettings}
           onOpenExtensions={props.onOpenExtensions}
+          onOpenSpaces={props.onOpenSpaces}
+          onOpenAdmin={props.onOpenAdmin}
           extensionsActive={props.extensionsActive}
           status={{
             clientConnected: props.clientConnected,

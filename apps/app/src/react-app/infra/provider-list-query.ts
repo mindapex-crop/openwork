@@ -63,6 +63,29 @@ export function getConnectedProviderItems(value: ProviderListResponse | null | u
   );
 }
 
+export type ProviderCatalogItem = {
+  id: string;
+  name: string;
+  connected: boolean;
+  source: ProviderListItem["source"];
+  models: Record<string, ProviderListItem["models"][string]>;
+};
+
+/**
+ * 全部 provider 目录（含未连接的）——all models 界面罗列所有 provider 的模型。
+ * 未连接 provider 的 models 来自 opencode 内置 models.dev 静态目录，连接后才有完整清单。
+ */
+export function getAllProviderItems(value: ProviderListResponse | null | undefined): ProviderCatalogItem[] {
+  const connected = new Set(value?.connected ?? []);
+  return (value?.all ?? []).map((provider) => ({
+    id: provider.id,
+    name: provider.name,
+    connected: connected.has(provider.id),
+    source: provider.source,
+    models: provider.models ?? {},
+  }));
+}
+
 export function getConnectedProviderSnapshot(value: ProviderListResponse | null | undefined): ConnectedProviderSnapshot {
   return getConnectedProviderItems(value)
     .map((provider) => ({

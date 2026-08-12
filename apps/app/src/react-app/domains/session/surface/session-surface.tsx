@@ -841,6 +841,33 @@ export function SessionSurface(props: SessionSurfaceProps) {
     props.cloudMcpSubmissionState.status === "repairing";
   const chatStreaming = sending || liveStatus.type === "busy" || liveStatus.type === "retry";
 
+  // 多 CLI agent 同窗口：会话元数据标记 cli=true，runningAgents 列出正在执行的 agent。
+  // chatStreaming 保持 session 级（任一 agent 忙碌即整体 busy，驱动底部 loading/状态条）；
+  // composer 的 busy 细分为"当前选中的 agent 是否正在执行"——其它 CLI agent 空闲时仍可并行发送。
+  const cliSessionMetadata = currentSnapshot?.session.metadata as
+    | { cli?: boolean; runningAgents?: string[] }
+    | undefined;
+  const isCliSession = cliSessionMetadata?.cli === true;
+  const cliRunningAgents = cliSessionMetadata?.runningAgents ?? [];
+  const composerBusy =
+    isCliSession && props.selectedAgent
+      ? sending || cliRunningAgents.includes(props.selectedAgent)
+      : chatStreaming;
+
+  // CLI 会话流式刷新：后端 cli-agent-session 边执行边把 thinking/回答增量写入
+  // store，前端在 busy/sending 期间每 500ms 轮询 snapshot 让增量实时上屏
+  // （opencode 原生会话走 SSE 事件流，无需轮询）。会话空闲后自动停止。
+  const snapshotRefetchRef = useRef<() => Promise<unknown>>(async () => {});
+  snapshotRefetchRef.current = () => snapshotQuery.refetch();
+  useEffect(() => {
+    if (!isCliSession) return;
+    if (!(sending || liveStatus.type === "busy" || liveStatus.type === "retry")) return;
+    const timer = setInterval(() => {
+      void snapshotRefetchRef.current();
+    }, 500);
+    return () => clearInterval(timer);
+  }, [isCliSession, liveStatus.type, sending]);
+
   useEffect(() => {
     if (!chatStreaming) setSteering(false);
   }, [chatStreaming]);
@@ -1979,6 +2006,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
                       onMcpReconnect={handleMcpReconnect}
                       onMcpReopenAuthorization={handleMcpReopenAuthorization}
                       onMcpRetry={handleMcpRetry}
+                      showAgentTags={isCliSession}
                     >
                       <MessageList
                         messages={renderedMessages}
@@ -2044,7 +2072,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
         onSteer={handleSteer}
         onQueue={handleQueue}
         onStop={handleAbort}
-        busy={chatStreaming}
+        busy={composerBusy}
+        agentSelectorDisabled={chatStreaming && !isCliSession}
         steering={steering}
         submissionPreparing={preparingCloudTools}
         queuedCount={queuedDrafts.length}

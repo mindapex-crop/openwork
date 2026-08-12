@@ -52,6 +52,13 @@ export interface AgentDetectResult {
   version?: string;
   /** 检测时的错误信息 */
   error?: string;
+  /**
+   * 置信度（0-1，仅 available 时有意义）：
+   * 基础分来自命中位置（PATH 0.85 / 常见安装目录 0.70），
+   * --version 有输出 +0.10，成功解析版本号 +0.05。
+   * detectAllAgents 按置信度降序返回。
+   */
+  confidence?: number;
 }
 
 /** Doctor 健康检查信息 */

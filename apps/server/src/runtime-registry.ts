@@ -49,6 +49,8 @@ export interface RuntimeAgentCapability {
   declaredHeadless: boolean;
   /** 实测自动化能力（GenericCliSidecarAdapter.detectCapabilities） */
   detected?: CliCapabilities;
+  /** 检测置信度（0-1，detectAllAgents 排序依据） */
+  confidence?: number;
   /** 检测错误（仅 available=false 时） */
   error?: string;
   /** preset 声明的能力（供 UI 判定是否支持模型切换等） */
@@ -61,6 +63,8 @@ export interface RuntimeAgentCapability {
   preferProtocolOrder?: Array<string>;
   /** 执行模式（仅 PTY 有意义） */
   executionMode?: "headless-oneshot" | "persistent-pty";
+  /** CLI 内置默认模型（选中该 CLI agent 时 UI 模型选择器应对齐到此模型） */
+  defaultModel?: { providerID: string; modelID: string };
 }
 
 export interface RuntimeRegistryOptions {
@@ -104,6 +108,7 @@ export class RuntimeRegistry {
         available: result.available,
         binaryPath: result.binaryPath,
         version: result.version,
+        confidence: result.confidence,
         protocol: preset?.protocol ?? "generic",
         engine: preset ? engineForProtocol(preset.protocol) : "generic",
         declaredHeadless: preset?.cliProfile?.headless === true,
@@ -114,6 +119,7 @@ export class RuntimeRegistry {
         installHint: preset?.installHint,
         preferProtocolOrder: preset?.preferProtocolOrder,
         executionMode: preset?.executionMode,
+        defaultModel: preset?.defaultModel,
       };
 
       if (result.available && preset && this.deepProbe) {
@@ -164,6 +170,7 @@ export class RuntimeRegistry {
       available: result.available,
       binaryPath: result.binaryPath,
       version: result.version,
+      confidence: result.confidence,
       protocol: preset.protocol ?? "generic",
       engine: engineForProtocol(preset.protocol ?? "generic"),
       declaredHeadless: preset.cliProfile?.headless === true,
@@ -174,6 +181,7 @@ export class RuntimeRegistry {
       installHint: preset.installHint,
       preferProtocolOrder: preset.preferProtocolOrder,
       executionMode: preset.executionMode,
+      defaultModel: preset.defaultModel,
     };
     if (result.available) {
       try {
