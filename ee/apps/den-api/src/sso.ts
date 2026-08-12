@@ -41,6 +41,8 @@ type OidcRegistrationInput = {
 export type OrganizationSsoRegistrationInput = (SamlRegistrationInput | OidcRegistrationInput) & {
   organizationId: OrganizationId
   organizationSlug: string
+  providerName?: string
+  customLoginPage?: string | null
   headers: Headers
 }
 
@@ -52,8 +54,8 @@ const oidcDiscoverySchema = z.object({
   userinfo_endpoint: z.string().url().optional(),
 })
 
-export function buildOrganizationSsoProviderId(organizationId: OrganizationId) {
-  return `openwork-sso-${organizationId}`
+export function buildOrganizationSsoProviderId(organizationId: OrganizationId, providerName?: string) {
+  return providerName ? `sso-${organizationId}-${providerName}` : `sso-${organizationId}`
 }
 
 export function getOrganizationSsoSignInPath(organizationSlug: string) {
@@ -382,9 +384,11 @@ export async function registerOrganizationSsoConnection(input: OrganizationSsoRe
     id: createDenTypeId("ssoConnection"),
     organizationId: input.organizationId,
     providerId,
+    providerName: input.providerName || "default",
     kind: input.kind,
     issuer: input.issuer,
     domain: input.domain,
+    customLoginPage: input.customLoginPage || null,
     status: "enabled",
     signInPath: getOrganizationSsoSignInPath(input.organizationSlug),
     lastTestedAt: new Date(),

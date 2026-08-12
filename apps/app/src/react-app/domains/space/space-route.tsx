@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  ArrowLeft,
   Boxes,
   CheckCircle2,
   Circle,
@@ -40,6 +41,7 @@ import { resolveOpenworkConnection } from "../../shell/openwork-connection";
 import { useBootState } from "../../shell/boot-state";
 import { readActiveWorkspaceId } from "../../shell/session-memory";
 import { formatSessionRelativeTime } from "../session/sidebar/utils";
+import { useNavigate } from "react-router-dom";
 import type { Session } from "@opencode-ai/sdk/v2/client";
 
 type SpaceTab = "activity" | "plans" | "tasks" | "assets" | "settings";
@@ -168,6 +170,8 @@ export function SpaceRoute() {
     void refreshConnection();
   }, [refreshConnection, refreshKey]);
 
+  const navigate = useNavigate();
+
   const selectedWorkspace = useMemo(
     () => workspaces.find((w) => w.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
     [selectedWorkspaceId, workspaces],
@@ -213,6 +217,14 @@ export function SpaceRoute() {
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-dls-border px-4">
           <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-11 hover:bg-gray-3 hover:text-gray-12"
+              onClick={() => navigate("/session")}
+            >
+              <ArrowLeft className="size-3.5" />
+              {t("app.back_to_session")}
+            </button>
             <span className="truncate text-sm font-medium text-dls-text">
               {SPACE_TABS.find((item) => item.id === tab)?.label}
             </span>

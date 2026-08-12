@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  ArrowLeft,
   Bot,
   Boxes,
   ChevronRight,
@@ -37,6 +38,7 @@ import { isDesktopRuntime } from "@/app/utils";
 import { t } from "@/i18n";
 import { workspaceBootstrap, type WorkspaceInfo, type WorkspaceList } from "@/app/lib/desktop";
 import { resolveOpenworkConnection } from "./openwork-connection";
+import { useNavigate } from "react-router-dom";
 import { useBootState } from "./boot-state";
 import {
   createWorkspaceServerClientResolver,
@@ -80,6 +82,8 @@ const ADMIN_TABS: Array<{ id: AdminTab; label: string; icon: typeof Server }> = 
 ];
 
 export function AdminRoute() {
+  const navigate = useNavigate();
+  const { markRouteReady } = useBootState();
   const [tab, setTab] = useState<AdminTab>("overview");
   const [baseUrl, setBaseUrl] = useState("");
   const [token, setToken] = useState("");
@@ -223,6 +227,14 @@ export function AdminRoute() {
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-dls-border px-4 mac:titlebar-drag">
           <div className="flex min-w-0 items-center gap-2 mac:titlebar-no-drag">
+            <button
+              type="button"
+              className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-11 hover:bg-gray-3 hover:text-gray-12"
+              onClick={() => navigate("/session")}
+            >
+              <ArrowLeft className="size-3.5" />
+              {t("app.back_to_session")}
+            </button>
             <span className="truncate text-sm font-medium text-dls-text">
               {ADMIN_TABS.find((item) => item.id === tab)?.label}
             </span>

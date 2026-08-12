@@ -310,9 +310,11 @@ export const SsoConnectionTable = mysqlTable(
     id: denTypeIdColumn("ssoConnection", "id").notNull().primaryKey(),
     organizationId: denTypeIdColumn("organization", "organization_id").notNull(),
     providerId: varchar("provider_id", { length: 255 }).notNull(),
+    providerName: varchar("provider_name", { length: 255 }).notNull(),
     kind: varchar("kind", { length: 16 }).notNull(),
     issuer: varchar("issuer", { length: 2048 }).notNull(),
     domain: varchar("domain", { length: 255 }).notNull(),
+    customLoginPage: text("custom_login_page"),
     status: varchar("status", { length: 32 }).notNull().default("enabled"),
     signInPath: varchar("sign_in_path", { length: 2048 }).notNull(),
     lastTestedAt: timestamp("last_tested_at", { fsp: 3 }),
@@ -323,9 +325,10 @@ export const SsoConnectionTable = mysqlTable(
       .default(sql`CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)`),
   },
   (table) => [
-    uniqueIndex("sso_connection_organization_id").on(table.organizationId),
     uniqueIndex("sso_connection_provider_id").on(table.providerId),
+    uniqueIndex("sso_connection_org_name").on(table.organizationId, table.providerName),
     index("sso_connection_domain").on(table.domain),
+    index("sso_connection_organization_id").on(table.organizationId),
   ],
 )
 
