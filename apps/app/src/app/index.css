@@ -288,12 +288,16 @@ input, textarea, [role="textbox"] {
 
 /* --- Body 全局白底 --- */
 body {
+  height: 100%;
+  overflow: hidden;
   background: #FFFFFF !important;
   color: #1A1A1A !important;
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
 }
 
 #root {
+  height: 100%;
+  overflow: hidden;
   background: #FFFFFF !important;
 }
 
