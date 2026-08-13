@@ -23,6 +23,11 @@ tmp/
 _worktrees/
 .worktrees/
 
+# Local tooling / runtime residue
+.aider.chat.history.md
+.aider.tags.cache.v4/
+.openwork-electron-dev/
+
 # Desktop sidecars
 apps/desktop/resources/sidecars/
 apps/desktop/server/
