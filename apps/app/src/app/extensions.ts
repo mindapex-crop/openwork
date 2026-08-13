@@ -1,5 +1,12 @@
 // Owned here: reload vocabulary is part of the extension manifest contract.
 // types.ts re-exports it for the rest of the app.
+import type {
+  ComposerActionSlot,
+  ComposerActionContribution as ComposerActionContributionCore,
+} from "@/react-app/domains/session/surface/composer/composer-contributions";
+
+export type { ComposerActionSlot } from "@/react-app/domains/session/surface/composer/composer-contributions";
+
 export type ReloadReason = "plugins" | "skills" | "mcp" | "config" | "agents" | "commands";
 
 export type OpenWorkExtensionSourceFormat =
@@ -59,21 +66,7 @@ export type OpenWorkExtensionContributionType =
   | "native-capability"
   | "test-action";
 
-export type ComposerActionSlot = "leading" | "trailing";
-
-export type ComposerActionContribution = {
-  id: string;
-  slot: ComposerActionSlot;
-  /** Higher values render first within the slot. Defaults to 0. */
-  priority?: number;
-  /**
-   * Renderer called into the L1 composer contribution registry. Accepts the
-   * same `ComposerContributionContext` the registry hands out — the manifest
-   * lives right next to the feature's code and the core composer never
-   * imports it.
-   */
-  render: (ctx: unknown) => unknown;
-};
+export type ComposerActionContribution = ComposerActionContributionCore;
 
 export type OpenWorkExtensionContribution = {
   type: OpenWorkExtensionContributionType;
