@@ -1182,6 +1182,13 @@ export function ReactSessionComposer(props: ComposerProps) {
     );
   };
 
+  const contributionCtx: ComposerContributionContext = {
+    draft: props.draft,
+    setDraft: props.onDraftChange,
+    busy: props.busy,
+    disabled: props.disabled,
+  };
+
   return (
     <div
       ref={rootRef}
