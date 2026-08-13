@@ -51,12 +51,32 @@ export type OpenWorkExtensionContributionType =
   | "settings-panel"
   | "setup-instructions"
   | "composer-prompt"
+  | "composer-action"
   | "session-side-panel"
   | "session-rail-item"
   | "control-actions"
   | "server-route"
   | "native-capability"
   | "test-action";
+
+export type ComposerActionSlot = "leading" | "trailing";
+
+export type ComposerActionContribution = {
+  /** Uniquely names the action within the extension (e.g. "mic"). */
+  id: string;
+  slot: ComposerActionSlot;
+  /** Higher values render first within the slot. Defaults to 0. */
+  priority?: number;
+  /**
+   * Renderer called into the L1 composer contribution registry. Accepts the
+   * same `ComposerContributionContext` the registry hands out — the manifest
+   * lives right next to the feature's code and the core composer never
+   * imports it. Third-party plugins without a function (e.g. JSON manifests)
+   * can call `registerComposerAction(...)` directly; the L1 registry accepts
+   * both paths.
+   */
+  render: (ctx: unknown) => unknown;
+};
 
 export type OpenWorkExtensionContribution = {
   type: OpenWorkExtensionContributionType;
@@ -65,6 +85,8 @@ export type OpenWorkExtensionContribution = {
   description?: string;
   prompt?: string;
   location?: "settings-detail" | "composer" | "session-right-pane" | "session-rail" | "server" | "native";
+  /** For `type: "composer-action"` only — see ComposerActionContribution. */
+  composerAction?: ComposerActionContribution;
 };
 
 export type OpenWorkExtensionSetup = {

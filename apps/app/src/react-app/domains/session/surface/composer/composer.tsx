@@ -37,9 +37,6 @@ import {
   getComposerActions,
   type ComposerContributionContext,
 } from "./composer-contributions";
-// Built-in incremental features register themselves into the composer
-// contribution registry at module load (e.g. voice input below).
-import "./composer-voice-input";
 
 type MentionItem = {
   id: string;

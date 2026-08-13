@@ -42,8 +42,6 @@ import {
 import { OpenworkContextPublisher } from "./openwork-context-publisher";
 import { SessionRoute } from "./session-route";
 import { SettingsRoute } from "./settings-route";
-import { AdminRoute } from "./admin-route";
-import { SpaceRoute } from "../domains/space/space-route";
 import { ShellConfigProvider } from "./shell-config";
 import { WelcomeRoute } from "./welcome-route";
 
@@ -51,6 +49,19 @@ import { WelcomeRoute } from "./welcome-route";
 type DenSigninGateProps = {
   children: ReactNode;
 };
+
+// Boot the composer contribution layer exactly once. This is intentionally
+// run in the app shell (not inside the composer) so built-in extensions
+// register before the composer ever mounts — the composer itself stays
+// ignorant of any specific feature. The registration is cheap (just stores
+// render functions); actual voice recognition is only started by user click.
+if (typeof window !== "undefined") {
+  try {
+    registerComposerContributions();
+  } catch (error) {
+    console.warn("[openwork:extensions] composer contribution bootstrap failed:", error);
+  }
+}
 
 const readDenBootstrapSnapshot = () => readDenBootstrapConfig();
 
@@ -446,22 +457,10 @@ export function AppRoot() {
                   </DevProfiler>
                 }
               />
-              <Route
-                path="/admin"
-                element={
-                  <DevProfiler id="AdminRoute">
-                    <AdminRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/space"
-                element={
-                  <DevProfiler id="SpaceRoute">
-                    <SpaceRoute />
-                  </DevProfiler>
-                }
-              />
+              {/* Legacy full-screen routes now live inside Settings. Old
+                  deep links redirect to their Settings equivalents. */}
+              <Route path="/admin" element={<Navigate to="/settings/backend" replace />} />
+              <Route path="/space" element={<Navigate to="/settings/space" replace />} />
               {/* Default + fallback: land on the session view. Users open
                   settings deliberately via the sidebar or command palette. */}
               <Route path="/" element={<Navigate to="/session" replace />} />

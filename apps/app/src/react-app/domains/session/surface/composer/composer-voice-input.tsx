@@ -6,17 +6,6 @@ import { cn } from "@/lib/utils";
 import { t } from "@/i18n";
 import { registerComposerAction, type ComposerContributionContext } from "./composer-contributions";
 
-/**
- * Voice input via the browser's Web Speech API.
- *
- * Incremental feature mounted through the composer contribution registry —
- * the core composer has no knowledge of it. Click the mic to start dictating;
- * recognized text is appended to the composer draft in real time (final
- * results commit, interim results preview). Click again to stop.
- *
- * Unsupported browsers (no SpeechRecognition) render nothing.
- */
-
 /** Minimal structural types for the Web Speech API. */
 type SpeechRecognitionEventLike = {
   resultIndex: number;
@@ -170,10 +159,4 @@ function VoiceInputButton({ ctx }: { ctx: ComposerContributionContext }) {
   );
 }
 
-// Mount as a built-in incremental feature through the contribution registry.
-registerComposerAction({
-  id: "voice-input",
-  slot: "leading",
-  priority: 10,
-  render: (ctx) => <VoiceInputButton ctx={ctx} />,
-});
+
