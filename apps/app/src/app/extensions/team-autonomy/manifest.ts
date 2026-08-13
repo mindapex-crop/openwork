@@ -23,7 +23,7 @@
  * the manifest here is the contract that will govern them.
  */
 
-import type { OpenWorkExtensionManifest } from "../../app/extensions";
+import type { OpenWorkExtensionManifest } from "../../extensions";
 
 /**
  * All 52 HTTP routes exposed by the team autonomy feature.
@@ -108,16 +108,25 @@ const teamAutonomyServerRoutes: Array<{
 ];
 
 export const TEAM_AUTONOMY_MANIFEST: OpenWorkExtensionManifest = {
+  schemaVersion: 1,
   id: "madapex-team-autonomy",
-  source: "openwork-extension-manifest",
-  version: "0.1.0",
   name: "Team Autonomy",
   description:
     "Multi-agent team orchestration: agents, tasks, boards, artifacts, automations, inbox approvals, and permissions. " +
     "Each team runs its own pool of CLI agent sidecars, coordinated by an orchestration layer with approval gates and " +
     "standing permission rules.",
-  author: "MindApex",
+  source: { format: "openwork-extension-manifest", trusted: true },
   defaultEnabled: true,
+  resources: [
+    // Generic CLI agent adapter as a local-service resource
+    {
+      type: "local-service",
+      id: "madapex-team-autonomy:generic-cli-adapter",
+      description:
+        "Generic CLI agent adapter. Spawns an external agent CLI in headless mode " +
+        "and proxies commands over a local socket. Fails fast on protocol errors.",
+    },
+  ],
   contributions: [
     // Phase 1 core prerequisites — must land before this extension activates
     //   - 6 drizzle tables (assets / tasks / agents / inbox / permissions / automations)
@@ -171,18 +180,6 @@ export const TEAM_AUTONOMY_MANIFEST: OpenWorkExtensionManifest = {
       label: "New automation",
       description: "Schedule a recurring task run for the team.",
       prompt: "Create a new cron-based automation for the team.",
-    },
-
-    // Generic CLI agent adapter as a local-service resource
-    {
-      type: "resource",
-      resource: {
-        id: "madapex-team-autonomy:generic-cli-adapter",
-        type: "local-service",
-        description:
-          "Generic CLI agent adapter. Spawns an external agent CLI in headless mode " +
-          "and proxies commands over a local socket. Fails fast on protocol errors.",
-      },
     },
   ],
 };
