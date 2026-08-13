@@ -46,7 +46,19 @@ import { ShellConfigProvider } from "./shell-config";
 import { WelcomeRoute } from "./welcome-route";
 import { readOrgSelectionPending } from "../../app/lib/den-sign-in-intent";
 import { signedInRoute } from "./den-signin-routing";
+import { registerComposerContributions } from "../extensions/register-composer-actions";
 
+/**
+ * Boot the composer contribution layer exactly once. Built-in extensions
+ * register before the composer mounts — the composer itself stays ignorant
+ * of any specific feature. This is a no-op for SSR and when already called.
+ */
+let composerContributionsRegistered = false;
+export function ensureComposerContributionsRegistered(): void {
+  if (typeof window === "undefined" || composerContributionsRegistered) return;
+  composerContributionsRegistered = true;
+  registerComposerContributions();
+}
 
 type DenSigninGateProps = {
   children: ReactNode;
@@ -342,6 +354,11 @@ let appOpenedCaptured = false;
 
 export function AppRoot() {
   useDesktopFontZoomBehavior();
+
+  // Boot the composer contribution layer once, before any composer mounts.
+  // Called unconditionally at the top of the component so the first render
+  // always triggers it (the guard inside prevents double-registration).
+  ensureComposerContributionsRegistered();
 
   // Module-level dedupe keeps StrictMode double-mounts from double-counting.
   useEffect(() => {

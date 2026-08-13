@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Agent } from "@opencode-ai/sdk/v2/client";
 import { AppWindowMac, ArrowUp, Check, ChevronDown, ChevronRight, FileText, ListPlus, LoaderCircle, Paperclip, Plug, RefreshCw, Settings, Square, Terminal, X, Zap } from "lucide-react";
 import fuzzysort from "fuzzysort";
@@ -33,6 +33,10 @@ import {
 } from "./slash-command";
 import { encodeConnectSkillToken } from "./connect-skill-token";
 import { FILE_URL_RE, HTTP_URL_RE, type PastedTextChip } from "./pasted-text";
+import {
+  getComposerActions,
+  type ComposerContributionContext,
+} from "./composer-contributions";
 
 type MentionItem = {
   id: string;
@@ -1609,6 +1613,10 @@ export function ReactSessionComposer(props: ComposerProps) {
                     </div>
                   ) : null}
                 </div>
+
+                {getComposerActions("leading").map((action) => (
+                  <Fragment key={action.id}>{action.render(contributionCtx)}</Fragment>
+                ))}
 
                 {/* Agent picker (#2101/#1971). Shows the active agent and lets
                     the user switch without leaving the composer. The same
