@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Agent } from "@opencode-ai/sdk/v2/client";
 import { AppWindowMac, ArrowUp, Check, ChevronDown, ChevronRight, FileText, ListPlus, LoaderCircle, Paperclip, Plug, RefreshCw, Settings, Square, Terminal, X, Zap } from "lucide-react";
 import fuzzysort from "fuzzysort";
@@ -33,6 +33,13 @@ import {
 } from "./slash-command";
 import { encodeConnectSkillToken } from "./connect-skill-token";
 import { FILE_URL_RE, HTTP_URL_RE, type PastedTextChip } from "./pasted-text";
+import {
+  getComposerActions,
+  type ComposerContributionContext,
+} from "./composer-contributions";
+// Built-in incremental features register themselves into the composer
+// contribution registry at module load (e.g. voice input below).
+import "./composer-voice-input";
 
 type MentionItem = {
   id: string;
@@ -1198,6 +1205,14 @@ export function ReactSessionComposer(props: ComposerProps) {
       ? "rounded-t-[18px] border-t-transparent"
       : "";
 
+  // Context handed to every registered composer action contribution.
+  const contributionCtx: ComposerContributionContext = {
+    draft: props.draft,
+    setDraft: (value) => props.onDraftChange(value),
+    busy: props.busy,
+    disabled: props.disabled,
+  };
+
   const renderSlashMenu = () => {
     if (!slashOpen) return null;
     return (
@@ -1857,6 +1872,10 @@ export function ReactSessionComposer(props: ComposerProps) {
                   ) : null}
                 </div>
 
+                {getComposerActions("leading").map((action) => (
+                  <Fragment key={action.id}>{action.render(contributionCtx)}</Fragment>
+                ))}
+
                 <ModelSelect
                   open={props.modelPickerOpen}
                   value={selectedAgentModel ?? props.selectedModel}
@@ -1900,6 +1919,9 @@ export function ReactSessionComposer(props: ComposerProps) {
                   }}
                   disabled={props.steering}
                 />
+                {getComposerActions("trailing").map((action) => (
+                  <Fragment key={action.id}>{action.render(contributionCtx)}</Fragment>
+                ))}
               </div>
 
               {/*

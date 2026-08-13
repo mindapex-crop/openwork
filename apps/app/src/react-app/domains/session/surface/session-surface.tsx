@@ -1177,6 +1177,17 @@ export function SessionSurface(props: SessionSurfaceProps) {
   // Initial send (agent idle) and explicit "Steer" follow-up (agent busy)
   // share the same immediate path.
   const handleSend = useCallback(async () => {
+    // Model unavailable: keep the composer editable so the user can draft,
+    // but guide them to configure a provider instead of silently failing.
+    if (props.modelUnavailable) {
+      toast.warning(props.modelUnavailableMessage ?? t("models.model_unavailable_short"), {
+        action: {
+          label: "Configure providers",
+          onClick: () => props.onOpenSettingsSection?.("providers"),
+        },
+      });
+      return;
+    }
     const originalDraft = draft;
     const text = originalDraft.trim();
     if (!text && attachments.length === 0) return;
@@ -1199,7 +1210,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
       }
     } catch {
     }
-  }, [attachments, buildDraft, clearComposer, draft, props.sessionId, sendDraft]);
+  }, [attachments, buildDraft, clearComposer, draft, props.modelUnavailable, props.modelUnavailableMessage, props.onOpenSettingsSection, props.sessionId, sendDraft]);
 
   // One-step run from the empty-state hero: the route seeds this session's
   // draft and marks it for auto-send. Fire the same send path as the send
@@ -2077,7 +2088,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         steering={steering}
         submissionPreparing={preparingCloudTools}
         queuedCount={queuedDrafts.length}
-        disabled={model.transitionState !== "idle" || Boolean(props.modelUnavailable)}
+        disabled={model.transitionState !== "idle"}
         modelUnavailable={Boolean(props.modelUnavailable)}
         modelUnavailableMessage={props.modelUnavailableMessage}
         organizationModelsEmpty={props.organizationModelsEmpty}
