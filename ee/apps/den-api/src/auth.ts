@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import { ensurePersonalTeamForUser } from "./team-autonomy/personal-team.js";
 import { getInitialActiveOrganizationIdForUser } from "./active-organization.js";
 import { db } from "./db.js";
 import { env } from "./env.js";
@@ -614,6 +615,15 @@ export const auth = betterAuth({
         before: async (session) => {
           const userId = normalizeDenTypeId("user", session.userId);
           const activeOrganizationId = await getInitialActiveOrganizationIdForUser(userId);
+          // 团队第一等公民：每次会话创建时幂等确保用户有 personal team。
+          // 失败只记录，不阻塞登录。
+          try {
+            if (activeOrganizationId) {
+              await ensurePersonalTeamForUser(userId, activeOrganizationId);
+            }
+          } catch (err) {
+            logger.warn("auth.session.create: ensurePersonalTeam failed (non-blocking)", { userId, err });
+          }
           try {
             // SSO JIT creates the raw member row before the session row, so this
             // chokepoint can merge any matching pending invitation without blocking sign-in.

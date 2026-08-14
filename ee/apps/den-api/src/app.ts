@@ -38,6 +38,7 @@ import { DEN_MCP_REQUESTED_SCOPES } from "./mcp/scopes.js"
 import { codemodeScriptsEnabled } from "./capability-sources/codemode-rollout.js"
 import { registerMeRoutes } from "./routes/me/index.js"
 import { registerOrgRoutes } from "./routes/org/index.js"
+import { registerTeamAutonomyRoutes } from "./routes/team-autonomy/index.js"
 import { registerTelemetryRoutes } from "./routes/telemetry/index.js"
 import { registerVersionRoutes } from "./routes/version/index.js"
 import { registerWebhookRoutes } from "./routes/webhooks/index.js"
@@ -215,6 +216,7 @@ registerMeRoutes(app)
 registerMemoryRoutes(app)
 registerAutomationRoutes(app)
 registerOrgRoutes(app)
+registerTeamAutonomyRoutes(app)
 registerVersionRoutes(app)
 registerWebhookRoutes(app)
 registerWorkerRoutes(app)
