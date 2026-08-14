@@ -56,6 +56,9 @@ function showVoiceError() {
 function VoiceInputButton({ ctx }: { ctx: ComposerContributionContext }) {
   const [supported] = useState(() => getRecognitionConstructor() !== null);
   const [listening, setListening] = useState(false);
+  // True once the browser rejects mic access or the speech service is unavailable.
+  // Stops rendering an apparently-functional button that only errors on every click.
+  const [blocked, setBlocked] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const baseDraftRef = useRef("");
   const finalTranscriptRef = useRef("");
@@ -101,7 +104,12 @@ function VoiceInputButton({ ctx }: { ctx: ComposerContributionContext }) {
     };
 
     recognition.onerror = (event) => {
-      if (event.error !== "no-speech" && event.error !== "aborted") showVoiceError();
+      if (event.error !== "no-speech" && event.error !== "aborted") {
+        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+          setBlocked(true);
+        }
+        showVoiceError();
+      }
       stopListening();
     };
 
@@ -127,13 +135,13 @@ function VoiceInputButton({ ctx }: { ctx: ComposerContributionContext }) {
 
   if (!supported) return null;
 
-  const micDisabled = ctx.disabled || ctx.busy;
+  const micDisabled = ctx.disabled || ctx.busy || blocked;
 
   return (
     <button
       type="button"
-      aria-label={listening ? t("composer.voice_input_listening") : t("composer.voice_input")}
-      title={listening ? t("composer.voice_input_listening") : t("composer.voice_input")}
+      aria-label={blocked ? t("composer.voice_input_error") : listening ? t("composer.voice_input_listening") : t("composer.voice_input")}
+      title={blocked ? t("composer.voice_input_error") : listening ? t("composer.voice_input_listening") : t("composer.voice_input")}
       aria-pressed={listening}
       disabled={micDisabled}
       onClick={() => {
