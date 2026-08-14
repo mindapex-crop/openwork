@@ -358,7 +358,15 @@ export type McpStatus =
 
 export type McpStatusMap = Record<string, McpStatus>;
 
-export type { ReloadReason } from "./extensions";
+export type {
+  ReloadReason,
+  ComposerActionSlot,
+  ComposerActionContribution,
+  OpenWorkExtensionContributionType,
+  OpenWorkExtensionManifest,
+  OpenWorkExtensionContribution,
+  OpenWorkExtensionResource,
+} from "./extensions";
 
 export type OpencodeConnectStatus = {
   at: number;
