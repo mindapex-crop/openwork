@@ -14,6 +14,7 @@
  */
 import { isTeamAutonomyEnabled } from "../shared/feature-flag.js";
 import type { TeamAutonomyLogger } from "../shared/types.js";
+import { ensurePersonalTeamForUser as localEnsure } from "../services/personal-team-ensure.js";
 
 type NoThrowLogger = Pick<TeamAutonomyLogger, "warn" | "error">;
 
@@ -29,8 +30,8 @@ export async function ensurePersonalTeamForUserSafe(
   deps: {
     logger: NoThrowLogger;
     /**
-     * Injectable implementation — defaults to the current den-api service
-     * via lazy workspace import. Swap for tests.
+     * Injectable implementation — defaults to the local in-package ensure
+     * service. Swap for tests.
      */
     impl?: (userId: string, organizationId: string) => Promise<unknown>;
   },
@@ -73,18 +74,8 @@ export async function ensurePersonalTeamForUser(
   return run(userId, activeOrganizationId);
 }
 
-// ---- default implementation bridged from den-api during migration ----
+// ---- local in-package implementation (previously bridged from den-api) ----
 async function defaultEnsureImpl(userId: string, organizationId: string): Promise<unknown> {
-  // Lazy bridge: resolve the currently-in-den-api personal-team module via
-  // its known workspace path. Post-migration this will be a local service.
-  //
-  // TypeScript cannot resolve cross-workspace src/ imports when the package
-  // exports don't declare those paths. This is expected — the dynamic
-  // import is a WORKSPACE link resolved by Node at runtime via
-  // pnpm-workspace's node_modules symlink.
-  //
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore - workspace runtime import, types loaded via symlink
-  const mod = await import("@openwork-ee/den-api/src/team-autonomy/personal-team.js");
-  return mod.ensurePersonalTeamForUser(userId as never, organizationId as never);
+  const { ensurePersonalTeamForUser: localEnsure } = await import("../services/personal-team-ensure.js");
+  return localEnsure(userId, organizationId);
 }

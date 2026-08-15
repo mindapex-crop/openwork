@@ -65,9 +65,7 @@ export * from "@openwork-ee/den-api/src/team-autonomy/task-service.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore - migration bridge
 export * from "@openwork-ee/den-api/src/team-autonomy/team-agent-service.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore - migration bridge
-export * from "@openwork-ee/den-api/src/team-autonomy/personal-team.js";
+export * from "./personal-team-ensure.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore - migration bridge
 export * from "@openwork-ee/den-api/src/team-autonomy/scheduler-worker.js";
