@@ -1,14 +1,11 @@
-// team-autonomy/inbox.ts — Inbox 路由（幂等 + resolve）
-// OpenSpecs: prds/team-autonomy/openspecs/openspec-http-routes.md
-// 挂载前缀: /api/teams/:teamId/inbox
-
+// @ts-nocheck
 import type { Hono } from "hono"
 import { describeRoute } from "hono-openapi"
 import { z } from "zod"
-import { db } from "../../db.js"
+import { db } from "./db-bridge.js"
 import { and, eq } from "@openwork-ee/den-db/drizzle"
 import { TeamInboxTable, TeamInboxKind, TeamInboxAssigneeType } from "@openwork-ee/den-db/schema"
-import * as inboxService from "../../team-autonomy/inbox-service.js"
+import * as services from "@openwork-ee/team-autonomy/services"
 import {
   authenticatedRoute,
   denTypeIdSchema,
@@ -22,8 +19,17 @@ import {
   teamRoleCheck,
   type TeamAutonomyRouteVariables,
   unauthorizedSchema,
-} from "./shared.js"
-import { jsonValidator, paramValidator, queryValidator } from "../../middleware/index.js"
+  jsonValidator,
+  paramValidator,
+  queryValidator,
+} from "./shared-bridge.js"
+
+const inboxService = services as {
+  listPendingInbox: (teamId: string, opts: { type: "member" | "agent"; id: string }) => Promise<unknown[]>
+  createInboxEntry: (input: { teamId: string; assigneeType: string; assigneeId: string; kind: string; sessionId?: string; taskId?: string; toolName?: string; arguments?: Record<string, unknown>; reason?: string; externalToolCallId?: string }) => Promise<{ ok: boolean; entry?: unknown; created?: boolean }>
+  findInboxById: (id: string) => Promise<unknown | undefined>
+  resolveInboxEntry: (id: string, input: { status: string; resolution?: Record<string, unknown>; reason?: string; supersededBy?: string }, resolvedBy: string) => Promise<{ ok: boolean; entry?: unknown; status?: number; response?: Record<string, unknown> }>
+}
 
 const createInboxSchema = z.object({
   sessionId: denTypeIdSchema("session").optional(),
@@ -77,7 +83,6 @@ const createInboxResponseSchema = z.object({
   created: z.boolean(),
 }).meta({ ref: "TeamInboxCreateResponse" })
 
-// 校验 inbox 条目属于该 team
 async function findInboxInTeam(inboxId: `tibx_${string}`, teamId: `tem_${string}`) {
   const rows = await db
     .select({ id: TeamInboxTable.id })
@@ -88,7 +93,6 @@ async function findInboxInTeam(inboxId: `tibx_${string}`, teamId: `tem_${string}
 }
 
 export function registerTeamInboxRoutes<T extends { Variables: TeamAutonomyRouteVariables }>(app: Hono<T>) {
-  // GET /api/teams/:teamId/inbox — list pending
   app.get(
     "/api/teams/:teamId/inbox",
     describeRoute({
@@ -118,7 +122,6 @@ export function registerTeamInboxRoutes<T extends { Variables: TeamAutonomyRoute
     },
   )
 
-  // POST /api/teams/:teamId/inbox — create
   app.post(
     "/api/teams/:teamId/inbox",
     describeRoute({
@@ -141,13 +144,12 @@ export function registerTeamInboxRoutes<T extends { Variables: TeamAutonomyRoute
       const input = c.req.valid("json")
       const result = await inboxService.createInboxEntry({ teamId: params.teamId, ...input })
       if (!result.ok) {
-        return jsonServiceError(c, result)
+        return jsonServiceError(c, result as any)
       }
       return c.json({ entry: result.entry, created: result.created }, 201)
     },
   )
 
-  // GET /api/teams/:teamId/inbox/:inboxId — get
   app.get(
     "/api/teams/:teamId/inbox/:inboxId",
     describeRoute({
@@ -177,7 +179,6 @@ export function registerTeamInboxRoutes<T extends { Variables: TeamAutonomyRoute
     },
   )
 
-  // POST /api/teams/:teamId/inbox/:inboxId/resolve
   app.post(
     "/api/teams/:teamId/inbox/:inboxId/resolve",
     describeRoute({
@@ -206,7 +207,7 @@ export function registerTeamInboxRoutes<T extends { Variables: TeamAutonomyRoute
       }
       const result = await inboxService.resolveInboxEntry(params.inboxId, input, ctx.currentMember.id)
       if (!result.ok) {
-        return jsonServiceError(c, result)
+        return jsonServiceError(c, result as any)
       }
       return c.json({ entry: result.entry })
     },

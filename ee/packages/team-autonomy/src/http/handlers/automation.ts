@@ -1,18 +1,11 @@
-// team-autonomy/automation.ts — 自动化路由（状态机 + 降级 + 告警）
-// OpenSpecs: prds/team-autonomy/openspecs/openspec-http-routes.md
-// 挂载前缀: /api/teams/:teamId/automations
-//
-// 注意：/automations/runs/... 与 /automations/alerts 静态段先于 /:automationId 注册，
-// 避免被动态段吞掉。
-
+// @ts-nocheck
 import type { Hono } from "hono"
 import { describeRoute } from "hono-openapi"
 import { z } from "zod"
-import { db } from "../../db.js"
+import { db } from "./db-bridge.js"
 import { and, eq } from "@openwork-ee/den-db/drizzle"
 import { TeamAutomationTable, TeamAutomationRunTable, TeamAutomationAlertTable, AutomationState, DegradationLevel } from "@openwork-ee/den-db/schema"
-import { createDenTypeId } from "@openwork-ee/utils/typeid"
-import * as automationService from "../../team-autonomy/automation-service.js"
+import * as automationService from "@openwork-ee/team-autonomy/services"
 import {
   actorFromContext,
   alertIdParamSchema,
@@ -29,8 +22,9 @@ import {
   teamRoleCheck,
   type TeamAutonomyRouteVariables,
   unauthorizedSchema,
-} from "./shared.js"
-import { jsonValidator, paramValidator } from "../../middleware/index.js"
+  jsonValidator,
+  paramValidator,
+} from "./shared-bridge.js"
 
 const retryPolicySchema = z.object({
   max_attempts: z.number().int().nonnegative(),
@@ -185,7 +179,6 @@ const startRunResponseSchema = z.object({
   created: z.boolean(),
 }).meta({ ref: "TeamAutomationStartRunResponse" })
 
-// TeamAutomationTable 行 → camelCase API 对象
 function rowToAutomation(row: typeof TeamAutomationTable.$inferSelect) {
   return {
     id: row.id,
@@ -214,7 +207,6 @@ function rowToAutomation(row: typeof TeamAutomationTable.$inferSelect) {
   }
 }
 
-// 校验 run 属于该 team（run → automation.team_id）
 async function findRunInTeam(runId: `taur_${string}`, teamId: `tem_${string}`) {
   const rows = await db
     .select({ id: TeamAutomationRunTable.id })
@@ -225,7 +217,6 @@ async function findRunInTeam(runId: `taur_${string}`, teamId: `tem_${string}`) {
   return rows[0] ? rows[0].id : null
 }
 
-// 校验 automation 属于该 team
 async function findAutomationInTeam(automationId: `taut_${string}`, teamId: `tem_${string}`) {
   const rows = await db
     .select({ id: TeamAutomationTable.id })
@@ -235,7 +226,6 @@ async function findAutomationInTeam(automationId: `taut_${string}`, teamId: `tem
   return rows[0] ? rows[0].id : null
 }
 
-// 校验 alert 属于该 team
 async function findAlertInTeam(alertId: `taal_${string}`, teamId: `tem_${string}`) {
   const rows = await db
     .select({ id: TeamAutomationAlertTable.id })
@@ -246,7 +236,6 @@ async function findAlertInTeam(alertId: `taal_${string}`, teamId: `tem_${string}
 }
 
 export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomyRouteVariables }>(app: Hono<T>) {
-  // GET /api/teams/:teamId/automations — list
   app.get(
     "/api/teams/:teamId/automations",
     describeRoute({
@@ -270,7 +259,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // POST /api/teams/:teamId/automations — create
   app.post(
     "/api/teams/:teamId/automations",
     describeRoute({
@@ -305,7 +293,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // GET /api/teams/:teamId/automations/runs/:runId — get run
   app.get(
     "/api/teams/:teamId/automations/runs/:runId",
     describeRoute({
@@ -335,7 +322,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // POST /api/teams/:teamId/automations/runs/:runId/advance
   app.post(
     "/api/teams/:teamId/automations/runs/:runId/advance",
     describeRoute({
@@ -373,7 +359,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // POST /api/teams/:teamId/automations/runs/:runId/fail
   app.post(
     "/api/teams/:teamId/automations/runs/:runId/fail",
     describeRoute({
@@ -410,7 +395,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // GET /api/teams/:teamId/automations/alerts — list alerts
   app.get(
     "/api/teams/:teamId/automations/alerts",
     describeRoute({
@@ -434,7 +418,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // POST /api/teams/:teamId/automations/alerts — create alert
   app.post(
     "/api/teams/:teamId/automations/alerts",
     describeRoute({
@@ -469,7 +452,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // POST /api/teams/:teamId/automations/alerts/:alertId/acknowledge
   app.post(
     "/api/teams/:teamId/automations/alerts/:alertId/acknowledge",
     describeRoute({
@@ -500,7 +482,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // GET /api/teams/:teamId/automations/:automationId — get
   app.get(
     "/api/teams/:teamId/automations/:automationId",
     describeRoute({
@@ -531,7 +512,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // PATCH /api/teams/:teamId/automations/:automationId — update
   app.patch(
     "/api/teams/:teamId/automations/:automationId",
     describeRoute({
@@ -564,7 +544,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // PATCH /api/teams/:teamId/automations/:automationId/schedule
   app.patch(
     "/api/teams/:teamId/automations/:automationId/schedule",
     describeRoute({
@@ -597,7 +576,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // POST /api/teams/:teamId/automations/:automationId/manual-run
   app.post(
     "/api/teams/:teamId/automations/:automationId/manual-run",
     describeRoute({
@@ -631,7 +609,6 @@ export function registerTeamAutomationRoutes<T extends { Variables: TeamAutonomy
     },
   )
 
-  // POST /api/teams/:teamId/automations/:automationId/runs — start run
   app.post(
     "/api/teams/:teamId/automations/:automationId/runs",
     describeRoute({

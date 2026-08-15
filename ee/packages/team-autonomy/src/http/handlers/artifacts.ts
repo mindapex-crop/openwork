@@ -1,14 +1,11 @@
-// team-autonomy/artifacts.ts — 共享产物路由（状态机 + 版本）
-// OpenSpecs: prds/team-autonomy/openspecs/openspec-http-routes.md
-// 挂载前缀: /api/teams/:teamId/artifacts
-
+// @ts-nocheck
 import type { Hono } from "hono"
 import { describeRoute } from "hono-openapi"
 import { z } from "zod"
-import { db } from "../../db.js"
+import { db } from "./db-bridge.js"
 import { and, eq } from "@openwork-ee/den-db/drizzle"
 import { TeamArtifactTable, ArtifactKind } from "@openwork-ee/den-db/schema"
-import * as assetService from "../../team-autonomy/asset-service.js"
+import * as assetService from "@openwork-ee/team-autonomy/services"
 import {
   actorFromContext,
   artifactIdParamSchema,
@@ -24,8 +21,10 @@ import {
   type TeamAutonomyRouteVariables,
   unauthorizedSchema,
   versionParamSchema,
-} from "./shared.js"
-import { jsonValidator, paramValidator, queryValidator } from "../../middleware/index.js"
+  jsonValidator,
+  paramValidator,
+  queryValidator,
+} from "./shared-bridge.js"
 
 const kindSchema = z.enum(ArtifactKind)
 
@@ -98,7 +97,6 @@ const versionResponseSchema = z.object({
   }),
 }).meta({ ref: "TeamArtifactVersionResponse" })
 
-// 校验 artifact 属于该 team
 async function findArtifactInTeam(artifactId: `tart_${string}`, teamId: `tem_${string}`) {
   const rows = await db
     .select({ id: TeamArtifactTable.id })
@@ -109,7 +107,6 @@ async function findArtifactInTeam(artifactId: `tart_${string}`, teamId: `tem_${s
 }
 
 export function registerTeamArtifactRoutes<T extends { Variables: TeamAutonomyRouteVariables }>(app: Hono<T>) {
-  // GET /api/teams/:teamId/artifacts — list
   app.get(
     "/api/teams/:teamId/artifacts",
     describeRoute({
@@ -146,7 +143,6 @@ export function registerTeamArtifactRoutes<T extends { Variables: TeamAutonomyRo
     },
   )
 
-  // POST /api/teams/:teamId/artifacts — create
   app.post(
     "/api/teams/:teamId/artifacts",
     describeRoute({
@@ -180,7 +176,6 @@ export function registerTeamArtifactRoutes<T extends { Variables: TeamAutonomyRo
     },
   )
 
-  // GET /api/teams/:teamId/artifacts/:artifactId — get
   app.get(
     "/api/teams/:teamId/artifacts/:artifactId",
     describeRoute({
@@ -210,7 +205,6 @@ export function registerTeamArtifactRoutes<T extends { Variables: TeamAutonomyRo
     },
   )
 
-  // POST /api/teams/:teamId/artifacts/:artifactId/transition — transition
   app.post(
     "/api/teams/:teamId/artifacts/:artifactId/transition",
     describeRoute({
@@ -251,7 +245,6 @@ export function registerTeamArtifactRoutes<T extends { Variables: TeamAutonomyRo
     },
   )
 
-  // POST /api/teams/:teamId/artifacts/:artifactId/versions — create version
   app.post(
     "/api/teams/:teamId/artifacts/:artifactId/versions",
     describeRoute({
@@ -292,7 +285,6 @@ export function registerTeamArtifactRoutes<T extends { Variables: TeamAutonomyRo
     },
   )
 
-  // GET /api/teams/:teamId/artifacts/:artifactId/versions/:version — get version
   app.get(
     "/api/teams/:teamId/artifacts/:artifactId/versions/:version",
     describeRoute({

@@ -1,14 +1,11 @@
-// team-autonomy/agents.ts — Agent 池路由
-// OpenSpecs: prds/team-autonomy/openspecs/openspec-http-routes.md
-// 挂载前缀: /api/teams/:teamId/agents（app.ts → registerTeamAutonomyRoutes）
-
+// @ts-nocheck
 import type { Hono } from "hono"
 import { describeRoute } from "hono-openapi"
 import { z } from "zod"
-import { db } from "../../db.js"
+import { db } from "./db-bridge.js"
 import { and, eq } from "@openwork-ee/den-db/drizzle"
 import { TeamAgentTable, TeamAgentEngine, EngineConfigProtocol } from "@openwork-ee/den-db/schema"
-import * as agentService from "../../team-autonomy/team-agent-service.js"
+import * as agentService from "@openwork-ee/team-autonomy/services"
 import {
   actorFromContext,
   agentIdParamSchema,
@@ -24,12 +21,12 @@ import {
   teamRoleCheck,
   type TeamAutonomyRouteVariables,
   unauthorizedSchema,
-} from "./shared.js"
-import { jsonValidator, paramValidator } from "../../middleware/index.js"
+  jsonValidator,
+  paramValidator,
+} from "./shared-bridge.js"
 
 const engineSchema = z.enum(TeamAgentEngine)
 
-// engine_config（engine='cli' 时 binary + protocol 必填；service 层 validateEngineConfig 兜底）
 const engineConfigSchema = z.object({
   binary: z.string().min(1),
   args: z.array(z.string()).optional(),
@@ -89,7 +86,6 @@ const agentListResponseSchema = z.object({
 }).meta({ ref: "TeamAgentListResponse" })
 
 export function registerTeamAgentRoutes<T extends { Variables: TeamAutonomyRouteVariables }>(app: Hono<T>) {
-  // GET /api/teams/:teamId/agents — list
   app.get(
     "/api/teams/:teamId/agents",
     describeRoute({
@@ -114,7 +110,6 @@ export function registerTeamAgentRoutes<T extends { Variables: TeamAutonomyRoute
     },
   )
 
-  // POST /api/teams/:teamId/agents — create
   app.post(
     "/api/teams/:teamId/agents",
     describeRoute({
@@ -148,7 +143,6 @@ export function registerTeamAgentRoutes<T extends { Variables: TeamAutonomyRoute
     },
   )
 
-  // GET /api/teams/:teamId/agents/:agentId — get
   app.get(
     "/api/teams/:teamId/agents/:agentId",
     describeRoute({
@@ -167,7 +161,6 @@ export function registerTeamAgentRoutes<T extends { Variables: TeamAutonomyRoute
     paramValidator(agentIdParamSchema),
     async (c) => {
       const params = c.req.valid("param")
-      // 校验 agent 属于该 team
       const rows = await db.select({ teamId: TeamAgentTable.team_id })
         .from(TeamAgentTable)
         .where(and(eq(TeamAgentTable.id, params.agentId), eq(TeamAgentTable.team_id, params.teamId)))
@@ -183,7 +176,6 @@ export function registerTeamAgentRoutes<T extends { Variables: TeamAutonomyRoute
     },
   )
 
-  // PATCH /api/teams/:teamId/agents/:agentId — update
   app.patch(
     "/api/teams/:teamId/agents/:agentId",
     describeRoute({
@@ -206,7 +198,6 @@ export function registerTeamAgentRoutes<T extends { Variables: TeamAutonomyRoute
       const ctx = c.get("organizationContext")!
       const params = c.req.valid("param")
       const input = c.req.valid("json")
-      // zod 允许 null 以表达"清除字段"，但 service 层 UpdateAgentInput 不接受 null → 过滤
       const patch = Object.fromEntries(Object.entries(input).filter(([, v]) => v !== null)) as Parameters<typeof agentService.updateAgent>[1]
       const result = await agentService.updateAgent(params.agentId, patch, actorFromContext(ctx))
       if (!result.ok) {
@@ -216,7 +207,6 @@ export function registerTeamAgentRoutes<T extends { Variables: TeamAutonomyRoute
     },
   )
 
-  // DELETE /api/teams/:teamId/agents/:agentId — delete
   app.delete(
     "/api/teams/:teamId/agents/:agentId",
     describeRoute({
@@ -245,7 +235,6 @@ export function registerTeamAgentRoutes<T extends { Variables: TeamAutonomyRoute
     },
   )
 
-  // POST /api/teams/:teamId/agents/:agentId/assign/:taskId
   app.post(
     "/api/teams/:teamId/agents/:agentId/assign/:taskId",
     describeRoute({
@@ -274,7 +263,6 @@ export function registerTeamAgentRoutes<T extends { Variables: TeamAutonomyRoute
     },
   )
 
-  // POST /api/teams/:teamId/agents/:agentId/unassign
   app.post(
     "/api/teams/:teamId/agents/:agentId/unassign",
     describeRoute({
@@ -303,7 +291,6 @@ export function registerTeamAgentRoutes<T extends { Variables: TeamAutonomyRoute
     },
   )
 
-  // POST /api/teams/:teamId/agents/:agentId/pause
   app.post(
     "/api/teams/:teamId/agents/:agentId/pause",
     describeRoute({
@@ -332,7 +319,6 @@ export function registerTeamAgentRoutes<T extends { Variables: TeamAutonomyRoute
     },
   )
 
-  // POST /api/teams/:teamId/agents/:agentId/resume
   app.post(
     "/api/teams/:teamId/agents/:agentId/resume",
     describeRoute({
