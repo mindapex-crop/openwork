@@ -38,7 +38,10 @@ import { DEN_MCP_REQUESTED_SCOPES } from "./mcp/scopes.js"
 import { codemodeScriptsEnabled } from "./capability-sources/codemode-rollout.js"
 import { registerMeRoutes } from "./routes/me/index.js"
 import { registerOrgRoutes } from "./routes/org/index.js"
-import { registerTeamAutonomyRoutes } from "./routes/team-autonomy/index.js"
+// L3 plugin adapter seam — Team Autonomy routes:
+//   Feature-flagged. TEAM_AUTONOMY_ENABLED=1 loads the plugin routes;
+//   otherwise this call is a zero-cost no-op and plugin code never loads.
+import { registerTeamAutonomyRoutes } from "@openwork-ee/team-autonomy/routes"
 import { registerTelemetryRoutes } from "./routes/telemetry/index.js"
 import { registerVersionRoutes } from "./routes/version/index.js"
 import { registerWebhookRoutes } from "./routes/webhooks/index.js"
@@ -216,7 +219,16 @@ registerMeRoutes(app)
 registerMemoryRoutes(app)
 registerAutomationRoutes(app)
 registerOrgRoutes(app)
-registerTeamAutonomyRoutes(app)
+// L3 plugin seam: only mounts /api/teams/:teamId/* routes when
+// TEAM_AUTONOMY_ENABLED=1. Routes are registered asynchronously by the
+// plugin so this call returns immediately.
+// Cast through unknown: the plugin accepts the AppVariables superset at
+// runtime (its handlers read userId/activeOrganizationId via middleware
+// that populates those keys); Hono's generic inference can't prove the
+// structural overlap statically.
+registerTeamAutonomyRoutes(
+  app as unknown as Parameters<typeof registerTeamAutonomyRoutes>[0],
+)
 registerVersionRoutes(app)
 registerWebhookRoutes(app)
 registerWorkerRoutes(app)
