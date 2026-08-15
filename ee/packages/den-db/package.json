@@ -66,6 +66,11 @@
       "development": "./src/schema/telemetry.ts",
       "default": "./dist/schema/telemetry.js"
     },
+    "./schema/team-autonomy": {
+      "types": "./src/schema/team-autonomy.ts",
+      "development": "./src/schema/team-autonomy.ts",
+      "default": "./dist/schema/team-autonomy.js"
+    },
     "./drizzle": {
       "types": "./src/drizzle.ts",
       "development": "./src/drizzle.ts",
