@@ -27,9 +27,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { Writable, Readable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
-// type alias for web streams (avoids generic-on-Writable type error)
-type WebWritable = WritableStream<Uint8Array>;
-type WebReadable = ReadableStream<Uint8Array>;
+// type alias for node:stream/web streams (SDK 类型基于 node:stream/web)
+type WebWritable = import("node:stream/web").WritableStream<Uint8Array>;
+type WebReadable = import("node:stream/web").ReadableStream<Uint8Array>;
 import { resolveCleanPath } from "../detect.js";
 import { restoreRealHomeEnv } from "../home-env.js";
 import { buildTransportEnv } from "../transport.js";
@@ -48,6 +48,13 @@ interface AcpConnection {
   protocolVersion: number;
   agentCapabilities: acp.AgentCapabilities | null;
   authMethods: acp.AuthMethod[] | null;
+}
+
+interface AcpInitializeResult {
+  agentInfo?: { name: string; version: string } | null;
+  protocolVersion?: number;
+  agentCapabilities?: acp.AgentCapabilities | null;
+  authMethods?: acp.AuthMethod[] | null;
 }
 
 export class AcpSidecarAdapter extends BaseSidecarAdapter {
@@ -135,9 +142,10 @@ export class AcpSidecarAdapter extends BaseSidecarAdapter {
           const allowOnce = opts.find((o) => o.kind === "allow_once");
           const allowAlways = opts.find((o) => o.kind === "allow_always");
           const selected = allowOnce ?? allowAlways ?? opts[0];
-          return selected
-            ? { outcome: { outcome: "selected", optionId: selected.optionId } }
-            : { outcome: { outcome: "cancelled" } };
+          if (selected?.optionId) {
+            return { outcome: { outcome: "selected", optionId: selected.optionId } };
+          }
+          return { outcome: { outcome: "cancelled" } };
         })
         .connect(this.stream);
 
@@ -147,7 +155,7 @@ export class AcpSidecarAdapter extends BaseSidecarAdapter {
       });
 
       // initialize 握手（agent ↔ client 协商）
-      const initResult = await this.clientConn.agent.request(acp.methods.agent.initialize, {
+      const initResult = await this.clientConn.agent.request<AcpInitializeResult>(acp.methods.agent.initialize, {
         protocolVersion: acp.PROTOCOL_VERSION,
         clientCapabilities: {
           fs: { readTextFile: false, writeTextFile: false },
@@ -155,7 +163,7 @@ export class AcpSidecarAdapter extends BaseSidecarAdapter {
       });
       this.connection = {
         agentInfo: initResult.agentInfo ?? null,
-        protocolVersion: initResult.protocolVersion,
+        protocolVersion: initResult.protocolVersion ?? 0,
         agentCapabilities: initResult.agentCapabilities ?? null,
         authMethods: initResult.authMethods ?? null,
       };

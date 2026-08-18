@@ -51,6 +51,17 @@ import {
 } from "@/components/ui/command";
 import { openModelPickerEvent, openProviderAuthEvent } from "@/react-app/shell/new-providers-listener";
 import { newProvidersEvent } from "@/app/lib/provider-events";
+import { addCliAgentOptionalModel, cliModelMatches, getCliAgentSupportedModels } from "@/react-app/domains/session/modals/cli-agent-model-store";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 /** Shown with their logos when no keys are connected yet. */
 const SUGGESTED_KEY_PROVIDERS = [
@@ -212,6 +223,10 @@ interface ModelSelectProps {
   openWorkModelsSyncing?: boolean;
   /** Member-scoped models available before a workspace OpenCode client exists. */
   fallbackOptions?: readonly ModelOption[];
+  /** Active CLI agent (e.g. "kimi"). Prioritizes its supported models. */
+  agentId?: string | null;
+  /** The selected CLI agent's built-in default model (Agent.model). */
+  agentDefaultModel?: ModelRef | null;
 }
 
 export function ModelSelect({
@@ -225,6 +240,8 @@ export function ModelSelect({
   openWorkModelsEntitled = false,
   openWorkModelsSyncing = false,
   fallbackOptions = [],
+  agentId,
+  agentDefaultModel,
 }: ModelSelectProps) {
   const [search, setSearch] = React.useState("");
   const [promoHidden, setPromoHidden] = React.useState(isOpenWorkModelsPromoHidden);
@@ -236,6 +253,55 @@ export function ModelSelect({
   const openWorkModelsPromoEligible = useOpenWorkModelsPromoEligibility();
   const checkDesktopRestriction = useCheckDesktopRestriction();
   const canAddProviders = !checkDesktopRestriction({ restriction: "allowCustomProviders" });
+
+  // CLI-agent awareness: the currently selected agent's supported models are
+  // pinned first. Selecting an unsupported model asks whether to register it
+  // as an optional model for that agent.
+  const hasAgentContext = Boolean(agentId);
+  const agentLabel = agentId ? agentId.charAt(0).toUpperCase() + agentId.slice(1) : "";
+  const supportedRefs = React.useMemo<ModelRef[]>(
+    () => (agentId ? getCliAgentSupportedModels(agentId, agentDefaultModel ?? undefined) : []),
+    [agentId, agentDefaultModel],
+  );
+  const supportedSet = React.useMemo(
+    () => new Set(supportedRefs.map((m) => `${m.providerID}/${m.modelID}`)),
+    [supportedRefs],
+  );
+  const isSupported = React.useCallback(
+    (option: ModelOption) => supportedSet.has(`${option.providerID}/${option.modelID}`),
+    [supportedSet],
+  );
+  const agentSupportedOptions = React.useMemo(
+    () => (hasAgentContext ? modelOptions.filter((option) => isSupported(option)) : []),
+    [hasAgentContext, isSupported, modelOptions],
+  );
+  const [confirmModel, setConfirmModel] = React.useState<ModelOption | null>(null);
+  const requestSelect = React.useCallback(
+    (option: ModelOption) => {
+      if (!hasAgentContext || isSupported(option)) {
+        onChange({ providerID: option.providerID, modelID: option.modelID });
+        setSearch("");
+        onOpenChange(false);
+        return;
+      }
+      setConfirmModel(option);
+    },
+    [hasAgentContext, isSupported, onChange, onOpenChange],
+  );
+  const confirmAddOptional = React.useCallback(() => {
+    if (agentId && confirmModel) {
+      addCliAgentOptionalModel(agentId, {
+        providerID: confirmModel.providerID,
+        modelID: confirmModel.modelID,
+      });
+    }
+    if (confirmModel) {
+      onChange({ providerID: confirmModel.providerID, modelID: confirmModel.modelID });
+      setSearch("");
+      onOpenChange(false);
+    }
+    setConfirmModel(null);
+  }, [agentId, confirmModel, onChange, onOpenChange]);
 
   React.useEffect(() => {
     const handlePromoChanged = () => setPromoHidden(isOpenWorkModelsPromoHidden());
@@ -286,15 +352,28 @@ export function ModelSelect({
 
   const groups = React.useMemo(() => {
     const providerGroups = groupByProvider(modelOptions);
-    return showOpenWorkModelsPromo
+    const base = showOpenWorkModelsPromo
       ? [openWorkModelsGroup(), ...providerGroups]
       : providerGroups;
-  }, [modelOptions, showOpenWorkModelsPromo]);
+    // With an active CLI agent, pin its supported models at the top so the
+    // quick picker prioritizes what that agent can actually run.
+    if (hasAgentContext) {
+      const pinned: ModelSelectGroup = {
+        value: `${agentLabel} models`,
+        promo: false,
+        items: agentSupportedOptions.map((option) => ({
+          kind: "model",
+          id: `${option.providerID}:${option.modelID}:supported`,
+          option,
+        })),
+      };
+      return [pinned, ...base];
+    }
+    return base;
+  }, [modelOptions, showOpenWorkModelsPromo, hasAgentContext, agentLabel, agentSupportedOptions]);
 
   const handleSelect = (option: ModelOption) => {
-    onChange({ providerID: option.providerID, modelID: option.modelID });
-    setSearch("");
-    onOpenChange(false);
+    requestSelect(option);
   };
 
   const handleOpenWorkModels = React.useCallback(() => {

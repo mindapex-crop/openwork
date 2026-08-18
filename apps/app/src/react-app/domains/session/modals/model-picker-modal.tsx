@@ -18,8 +18,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { t } from "@/i18n";
+import {
+  addCliAgentOptionalModel,
+  cliModelMatches,
+  getCliAgentSupportedModels,
+} from "./cli-agent-model-store";
 import { readDenSettings } from "@/app/lib/den";
 import { modelEquals, resolveProviderDisplayName } from "../../../../app/utils";
 import type { ModelOption, ModelRef } from "../../../../app/types";
@@ -67,6 +83,12 @@ export type ModelPickerModalProps = {
   openWorkModelsSyncing?: boolean;
   onRefreshOrganizationModels?: () => void | Promise<void>;
   restrictToCloud?: boolean;
+  /** Active CLI agent (e.g. "kimi"). When set, the picker prioritizes that
+   *  agent's supported models and confirms before registering an unsupported
+   *  model as an optional model for it. */
+  agentId?: string | null;
+  /** The selected CLI agent's built-in default model (Agent.model). */
+  agentDefaultModel?: ModelRef | null;
 };
 
 type ProviderGroup = {
@@ -139,6 +161,116 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
     [props.disabledProviders],
   );
 
+  /* ---- CLI-agent-aware model support ---- */
+  const hasAgentContext = Boolean(props.agentId);
+  const agentLabel = useMemo(
+    () => (props.agentId ? props.agentId.charAt(0).toUpperCase() + props.agentId.slice(1) : ""),
+    [props.agentId],
+  );
+  // The set of models this CLI agent can currently run: its built-in default
+  // plus any optional models the user has registered via this dialog.
+  const supportedRefs = useMemo<ModelRef[]>(
+    () => (props.agentId ? getCliAgentSupportedModels(props.agentId, props.agentDefaultModel ?? undefined) : []),
+    [props.agentId, props.agentDefaultModel],
+  );
+  const supportedSet = useMemo(
+    () => new Set(supportedRefs.map((m) => `${m.providerID}/${m.modelID}`)),
+    [supportedRefs],
+  );
+  const isModelSupported = useCallback(
+    (providerID: string, modelID: string) => supportedSet.has(`${providerID}/${modelID}`),
+    [supportedSet],
+  );
+
+  // Two-view picker: provider perspective (grouped) vs model perspective
+  // (flat). Only surfaced when a CLI agent is active, otherwise the classic
+  // single provider-grouped view is kept.
+  const [view, setView] = useState<"provider" | "model">("provider");
+  const [confirmModel, setConfirmModel] = useState<ModelOption | null>(null);
+
+  // Filter by search (declared before the agent-aware memos that consume it)
+  const filteredOptions = useMemo(() => {
+    const q = props.query.trim().toLowerCase();
+    if (!q) return props.options;
+    return props.options.filter(
+      (o) =>
+        o.title.toLowerCase().includes(q) ||
+        o.providerID.toLowerCase().includes(q) ||
+        o.modelID.toLowerCase().includes(q) ||
+        (o.description ?? "").toLowerCase().includes(q),
+    );
+  }, [props.options, props.query]);
+
+  // Synthesize ModelOption entries for the CLI agent's supported models so
+  // they show up even when their provider is not (yet) a connected source.
+  const agentSupportedOptions = useMemo<ModelOption[]>(() => {
+    if (!hasAgentContext) return [];
+    const byKey = new Map<string, ModelOption>();
+    for (const opt of filteredOptions) byKey.set(`${opt.providerID}/${opt.modelID}`, opt);
+    return supportedRefs
+      .map((ref) => {
+        const existing = byKey.get(`${ref.providerID}/${ref.modelID}`);
+        if (existing) return existing;
+        return {
+          providerID: ref.providerID,
+          modelID: ref.modelID,
+          title: ref.modelID,
+          description: resolveProviderDisplayName(ref.providerID),
+          behaviorTitle: "Reasoning",
+          behaviorLabel: "Default",
+          behaviorDescription: "",
+          behaviorValue: null,
+          isFree: false,
+          isRecommended: false,
+        };
+      })
+      .filter((opt, index, arr) => arr.findIndex((o) => o.providerID === opt.providerID && o.modelID === opt.modelID) === index);
+  }, [filteredOptions, hasAgentContext, supportedRefs]);
+
+  // Flat "model view": agent-supported models first, then everything else.
+  const modelViewOptions = useMemo<ModelOption[]>(() => {
+    if (!hasAgentContext) return filteredOptions;
+    const seen = new Set<string>();
+    const out: ModelOption[] = [];
+    for (const opt of agentSupportedOptions) {
+      seen.add(`${opt.providerID}/${opt.modelID}`);
+      out.push(opt);
+    }
+    for (const opt of filteredOptions) {
+      const key = `${opt.providerID}/${opt.modelID}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(opt);
+    }
+    return out;
+  }, [agentSupportedOptions, filteredOptions, hasAgentContext]);
+
+  // Selecting a model: supported models (or any model when no CLI agent is
+  // active) apply immediately; an unsupported model asks before registering
+  // it as an optional model for the active CLI agent.
+  const requestSelect = useCallback(
+    (opt: ModelOption) => {
+      const ref = { providerID: opt.providerID, modelID: opt.modelID };
+      if (!hasAgentContext || isModelSupported(opt.providerID, opt.modelID)) {
+        props.onSelect(ref);
+        return;
+      }
+      setConfirmModel(opt);
+    },
+    [hasAgentContext, isModelSupported, props.onSelect],
+  );
+  const confirmAddOptional = useCallback(() => {
+    if (props.agentId && confirmModel) {
+      addCliAgentOptionalModel(props.agentId, {
+        providerID: confirmModel.providerID,
+        modelID: confirmModel.modelID,
+      });
+      props.onSelect({ providerID: confirmModel.providerID, modelID: confirmModel.modelID });
+    }
+    setConfirmModel(null);
+  }, [confirmModel, props]);
+  const cancelConfirm = useCallback(() => setConfirmModel(null), []);
+
   // Reset on open
   useEffect(() => {
     if (props.open) {
@@ -158,19 +290,6 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
     const frame = requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [props.open]);
-
-  // Filter by search
-  const filteredOptions = useMemo(() => {
-    const q = props.query.trim().toLowerCase();
-    if (!q) return props.options;
-    return props.options.filter(
-      (o) =>
-        o.title.toLowerCase().includes(q) ||
-        o.providerID.toLowerCase().includes(q) ||
-        o.modelID.toLowerCase().includes(q) ||
-        (o.description ?? "").toLowerCase().includes(q),
-    );
-  }, [props.options, props.query]);
 
   // Group by provider
   const providerGroups = useMemo<ProviderGroup[]>(() => {
@@ -204,13 +323,20 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
       group.recommended.sort((a, b) => a.title.localeCompare(b.title));
       group.other.sort((a, b) => a.title.localeCompare(b.title));
     }
+    const supportedProviders = new Set<string>();
+    for (const ref of supportedRefs) supportedProviders.add(ref.providerID);
     return groups.sort((a, b) => {
+      if (hasAgentContext) {
+        const aSupported = supportedProviders.has(a.id);
+        const bSupported = supportedProviders.has(b.id);
+        if (aSupported !== bSupported) return aSupported ? -1 : 1;
+      }
       if (a.isDisabled !== b.isDisabled) return a.isDisabled ? 1 : -1;
       if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
       if (a.hasCurrent !== b.hasCurrent) return a.hasCurrent ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
-  }, [filteredOptions, props.current, disabledSet]);
+  }, [filteredOptions, props.current, disabledSet, hasAgentContext, supportedRefs]);
 
   // Auto-expand on search
   useEffect(() => {
@@ -284,8 +410,8 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
   }, []);
 
   const handleSelect = useCallback(
-    (opt: ModelOption) => props.onSelect({ providerID: opt.providerID, modelID: opt.modelID }),
-    [props.onSelect],
+    (opt: ModelOption) => requestSelect(opt),
+    [requestSelect],
   );
 
   const handleRefreshOrganizationModels = useCallback(async () => {
@@ -395,44 +521,92 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
           ) : null}
 
           {/* Content */}
-          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 -mr-1">
-            {emptyState ? (
-              <div className="space-y-3 rounded-2xl border border-dls-border bg-dls-hover/30 px-4 py-6 text-center">
-                <div className="text-sm text-dls-secondary">
-                  {t(emptyState.messageKey)}
+          <div className="flex min-h-0 flex-1 flex-col">
+            {hasAgentContext ? (
+              <div className="mb-3 shrink-0">
+                <Tabs value={view} onValueChange={(v) => setView(v as "provider" | "model")}>
+                  <TabsList className="w-full">
+                    <TabsTrigger value="provider" className="flex-1">Providers</TabsTrigger>
+                    <TabsTrigger value="model" className="flex-1">Models</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+                <div className="mt-1.5 px-1 text-[11px] text-dls-secondary">
+                  {agentSupportedOptions.length > 0
+                    ? `${agentLabel} can run ${agentSupportedOptions.length} model${agentSupportedOptions.length === 1 ? "" : "s"} below.`
+                    : `${agentLabel} has no registered models yet. Adding one will make it switchable in ${agentLabel}.`}
                 </div>
-                {emptyState.showRefreshOrganizationModels ? (
-                  <Button variant="outline" onClick={() => void handleRefreshOrganizationModels()} disabled={refreshingOrganizationModels}>
-                    <RefreshCw className={`mr-1 size-3 ${refreshingOrganizationModels ? "animate-spin" : ""}`} />
-                    {refreshingOrganizationModels ? t("models.refreshing_organization_models") : t("models.refresh_organization_models")}
-                  </Button>
-                ) : null}
-                {emptyState.showOrganizationModelsSettings && organizationModelsSettingsUrl ? (
-                  <Button variant="ghost" onClick={() => platform.openLink(organizationModelsSettingsUrl)}>
-                    {t("models.manage_organization_models")}
-                  </Button>
-                ) : null}
-                {emptyState.showConnectProvider ? (
-                  <Button variant="outline" onClick={props.onOpenSettings}>
-                    {t("models.connect_provider")}
-                  </Button>
-                ) : null}
               </div>
-            ) : (
-              providerGroups.map((group) => (
-                <ProviderAccordion
-                  key={group.id}
-                  group={group}
-                  expanded={expandedProviders.has(group.id)}
-                  current={props.current}
-                  canToggleProvider={!!props.onToggleProvider}
-                  onToggleExpand={() => toggleProvider(group.id)}
-                  onToggleProvider={props.onToggleProvider}
-                  onSelect={handleSelect}
-                  organizationProviderLabel={organizationProviderLabel}
-                />
-              ))
-            )}
+            ) : null}
+
+            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1 -mr-1">
+              {emptyState ? (
+                <div className="space-y-3 rounded-2xl border border-dls-border bg-dls-hover/30 px-4 py-6 text-center">
+                  <div className="text-sm text-dls-secondary">
+                    {t(emptyState.messageKey)}
+                  </div>
+                  {emptyState.showRefreshOrganizationModels ? (
+                    <Button variant="outline" onClick={() => void handleRefreshOrganizationModels()} disabled={refreshingOrganizationModels}>
+                      <RefreshCw className={`mr-1 size-3 ${refreshingOrganizationModels ? "animate-spin" : ""}`} />
+                      {refreshingOrganizationModels ? t("models.refreshing_organization_models") : t("models.refresh_organization_models")}
+                    </Button>
+                  ) : null}
+                  {emptyState.showOrganizationModelsSettings && organizationModelsSettingsUrl ? (
+                    <Button variant="ghost" onClick={() => platform.openLink(organizationModelsSettingsUrl)}>
+                      {t("models.manage_organization_models")}
+                    </Button>
+                  ) : null}
+                  {emptyState.showConnectProvider ? (
+                    <Button variant="outline" onClick={props.onOpenSettings}>
+                      {t("models.connect_provider")}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : view === "model" && hasAgentContext ? (
+                <div className="space-y-1">
+                  {modelViewOptions.length === 0 ? (
+                    <div className="rounded-2xl border border-dls-border bg-dls-hover/30 px-4 py-6 text-center text-sm text-dls-secondary">
+                      {t("models.no_models_match_search")}
+                    </div>
+                  ) : (
+                    modelViewOptions.map((opt) => (
+                      <DefaultModelRow
+                        key={`${opt.providerID}/${opt.modelID}`}
+                        opt={opt}
+                        current={props.current}
+                        onSelect={handleSelect}
+                        supportedLabel={isModelSupported(opt.providerID, opt.modelID) ? agentLabel : undefined}
+                      />
+                    ))
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {hasAgentContext && agentSupportedOptions.length > 0 ? (
+                    <AgentSupportedSection
+                      agentLabel={agentLabel}
+                      options={agentSupportedOptions}
+                      current={props.current}
+                      onSelect={handleSelect}
+                    />
+                  ) : null}
+                  {providerGroups.map((group) => (
+                    <ProviderAccordion
+                      key={group.id}
+                      group={group}
+                      expanded={expandedProviders.has(group.id)}
+                      current={props.current}
+                      canToggleProvider={!!props.onToggleProvider}
+                      onToggleExpand={() => toggleProvider(group.id)}
+                      onToggleProvider={props.onToggleProvider}
+                      onSelect={handleSelect}
+                      organizationProviderLabel={organizationProviderLabel}
+                      supportsAgentLabel={hasAgentContext ? agentLabel : undefined}
+                      isModelSupported={isModelSupported}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -443,6 +617,23 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
           </DialogClose>
         </DialogFooter>
       </DialogContent>
+
+      {/* Confirm registering an unsupported model for the active CLI agent. */}
+      <AlertDialog open={confirmModel !== null} onOpenChange={(open) => { if (!open) setConfirmModel(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Add this model to {agentLabel}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong>{confirmModel?.providerID}/{confirmModel?.modelID}</strong> is not currently supported by the
+              {" "}{agentLabel} CLI agent. Add it as an optional model so you can switch to it within {agentLabel}?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelConfirm}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmAddOptional}>Add &amp; use</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }
@@ -460,6 +651,8 @@ function ProviderAccordion({
   onToggleProvider,
   onSelect,
   organizationProviderLabel,
+  supportsAgentLabel,
+  isModelSupported,
 }: {
   group: ProviderGroup;
   expanded: boolean;
@@ -469,9 +662,13 @@ function ProviderAccordion({
   onToggleProvider?: (providerId: string, enabled: boolean) => void;
   onSelect: (opt: ModelOption) => void;
   organizationProviderLabel: string;
+  supportsAgentLabel?: string;
+  isModelSupported?: (providerID: string, modelID: string) => boolean;
 }) {
   const totalModels = group.recommended.length + group.other.length;
   const Chevron = expanded ? ChevronDown : ChevronRight;
+  const supportedFor = (opt: ModelOption) =>
+    supportsAgentLabel && isModelSupported ? isModelSupported(opt.providerID, opt.modelID) : false;
 
   return (
     <div className={group.isDisabled ? "opacity-50" : ""}>
@@ -530,7 +727,7 @@ function ProviderAccordion({
                 Recommended
               </div>
               {group.recommended.map((opt) => (
-                <DefaultModelRow key={opt.modelID} opt={opt} current={current} onSelect={onSelect} recommended />
+                <DefaultModelRow key={opt.modelID} opt={opt} current={current} onSelect={onSelect} recommended supported={supportedFor(opt)} supportedLabel={supportsAgentLabel} />
               ))}
             </>
           ) : null}
@@ -542,7 +739,7 @@ function ProviderAccordion({
                 </div>
               ) : null}
               {group.other.map((opt) => (
-                <DefaultModelRow key={opt.modelID} opt={opt} current={current} onSelect={onSelect} />
+                <DefaultModelRow key={opt.modelID} opt={opt} current={current} onSelect={onSelect} supported={supportedFor(opt)} supportedLabel={supportsAgentLabel} />
               ))}
             </>
           ) : null}
@@ -557,9 +754,9 @@ function ProviderAccordion({
 /* ------------------------------------------------------------------ */
 
 function DefaultModelRow({
-  opt, current, onSelect, recommended,
+  opt, current, onSelect, recommended, supported, supportedLabel,
 }: {
-  opt: ModelOption; current: ModelRef; onSelect: (opt: ModelOption) => void; recommended?: boolean;
+  opt: ModelOption; current: ModelRef; onSelect: (opt: ModelOption) => void; recommended?: boolean; supported?: boolean; supportedLabel?: string;
 }) {
   const active = modelEquals(current, { providerID: opt.providerID, modelID: opt.modelID });
 
@@ -577,7 +774,47 @@ function DefaultModelRow({
         <span className={["text-[12px]", active ? "font-medium text-dls-text" : "text-dls-text"].join(" ")}>{opt.title}</span>
         <span className="ml-2 font-mono text-[10px] text-dls-secondary/60">{opt.modelID}</span>
       </div>
+      {supported && supportedLabel ? (
+        <span className="shrink-0 rounded-md bg-green-3 px-1.5 py-0.5 text-[10px] font-medium text-green-11">
+          {supportedLabel}
+        </span>
+      ) : null}
       {active ? <Check size={14} className="shrink-0 text-green-11" /> : null}
     </button>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Pinned "For <agent>" section: the CLI agent's supported models     */
+/* ------------------------------------------------------------------ */
+
+function AgentSupportedSection({
+  agentLabel,
+  options,
+  current,
+  onSelect,
+}: {
+  agentLabel: string;
+  options: ModelOption[];
+  current: ModelRef;
+  onSelect: (opt: ModelOption) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-green-6/50 bg-green-2/20 px-2 py-1.5">
+      <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-green-11">
+        For {agentLabel}
+      </div>
+      <div className="space-y-0.5">
+        {options.map((opt) => (
+          <DefaultModelRow
+            key={`${opt.providerID}/${opt.modelID}`}
+            opt={opt}
+            current={current}
+            onSelect={onSelect}
+            recommended
+          />
+        ))}
+      </div>
+    </div>
   );
 }

@@ -8,6 +8,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { SecurityScreenVerdict } from "./security-posture.js";
+import { externalFetch } from "../../server-fetch.js";
 
 export type SecurityScreenHook = "user_input" | "tool_response";
 
@@ -195,15 +196,18 @@ function retryDelayMs(response: Response, fallback: number): number {
   return fallback;
 }
 
+type SecurityScreenRequester = (input: string, init?: RequestInit) => Promise<Response>;
+
 export function createSecurityScreenProxy(opts: {
   provider: string;
   endpoint: string;
   token: string;
   timeoutMs: number;
   shadow: boolean;
-  fetch?: typeof fetch;
+  request?: SecurityScreenRequester;
 }): SecurityScreener {
-  const request = opts.fetch ?? fetch;
+  // 外部 egress 统一走 externalFetch（Electron net / global fetch），避免裸 fetch
+  const request = opts.request ?? externalFetch;
   let activeShadow = 0;
   return {
     provider: opts.provider,

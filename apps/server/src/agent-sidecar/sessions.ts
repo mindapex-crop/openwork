@@ -50,32 +50,30 @@ export function mapSessionUpdateToUpdate(update: acp.SessionUpdate): AgentEvent 
     case "agent_thought_chunk": {
       const block = update.content;
       if (block.type === "text") {
-        return { kind: "agent-thought-chunk", text: block.text };
+        return { kind: "agent-thought-chunk", text: block.text as string };
       }
       return null;
     }
     case "user_message_chunk": {
       const block = update.content;
       if (block.type === "text") {
-        return { kind: "user-message-chunk", text: block.text };
+        return { kind: "user-message-chunk", text: block.text as string };
       }
       return null;
     }
     case "tool_call": {
-      const call = update as Extract<acp.SessionUpdate, { sessionUpdate: "tool_call" }>;
       return {
         kind: "tool-call",
-        toolCallId: call.toolCallId ?? "",
-        title: call.title ?? call.kind ?? "",
-        status: call.status ?? "running",
+        toolCallId: update.toolCallId ?? "",
+        title: update.title ?? update.kind ?? "",
+        status: update.status ?? "running",
       };
     }
     case "tool_call_update": {
-      const call = update as Extract<acp.SessionUpdate, { sessionUpdate: "tool_call_update" }>;
       return {
         kind: "tool-call-update",
-        toolCallId: call.toolCallId ?? "",
-        status: call.status ?? "running",
+        toolCallId: update.toolCallId ?? "",
+        status: update.status ?? "running",
       };
     }
     case "plan": {
@@ -230,7 +228,7 @@ export async function* runAcpPrompt(
       if (updateOrStop.kind === "msg") {
         const msg = updateOrStop.msg;
         if (msg.kind === "session_update") {
-          const event = mapSessionUpdateToUpdate(msg.update);
+          const event = mapSessionUpdateToUpdate(msg.update as acp.SessionUpdate);
           if (event) yield event;
         } else if (msg.kind === "stop") {
           // prompt 已完成，不再有 update

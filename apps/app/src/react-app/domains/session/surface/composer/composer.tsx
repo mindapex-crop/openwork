@@ -96,6 +96,10 @@ type ComposerProps = {
   onModelVariantChange: (value: string | null) => void;
   agentLabel: string;
   selectedAgent: string | null;
+  /** True when selectedAgent is an injected CLI agent (source === "openwork"). */
+  agentIsCli?: boolean;
+  /** The selected CLI agent's built-in default model (Agent.model). */
+  agentDefaultModel?: ModelRef | null;
   listAgents: () => Promise<Agent[]>;
   onSelectAgent: (agent: string | null) => void;
   listCommands: () => Promise<SlashCommandOption[]>;
@@ -1702,6 +1706,8 @@ export function ReactSessionComposer(props: ComposerProps) {
                   }}
                   disabled={props.steering}
                   sessionId={props.sessionId}
+                  agentId={props.agentIsCli ? props.selectedAgent : null}
+                  agentDefaultModel={props.agentDefaultModel}
                   openWorkModelsEntitled={props.openWorkModelsEntitled}
                   openWorkModelsSyncing={props.openWorkModelsSyncing}
                   fallbackOptions={props.modelOptions}

@@ -80,3 +80,4 @@ evals/results/
 
 # Warden local run logs
 .warden/logs/
+.aider*

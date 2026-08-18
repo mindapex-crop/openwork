@@ -89,6 +89,17 @@ import { addRoute, matchRoute, type AuthMode, type RequestContext, type Route } 
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { registerWorkspaceRoutes } from "./routes/workspaces.js";
 import { registerCloudMcpRoutes } from "./routes/cloud-mcp.js";
+import { registerSpaceRoutes } from "./routes/space.js";
+import { registerAgentRuntimeRoutes } from "./routes/agent-runtimes.js";
+import { registerWorktreeRoutes } from "./routes/worktrees.js";
+import { registerChatRoutes } from "./routes/chat.js";
+import { registerTrajectoryRoutes } from "./routes/trajectories.js";
+import { RuntimeRegistry } from "./runtime-registry.js";
+import { isCliAgentId, runCliAgentPrompt } from "./cli-agent-session.js";
+import { WorktreeService } from "./worktree/worktree-service.js";
+import { ChatRelayService } from "./chat/chat-relay.js";
+import { InMemoryChatChannel } from "./chat/channels/in-memory.js";
+import { createSurfaceRegistry, OpenWorkChatSurface } from "./surface/index.js";
 import {
   completeLocalManagedMcpAuthorization,
   createLocalManagedMcpConnection,
@@ -894,6 +905,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   const tokens = new TokenService(config);
   const env = new EnvService();
   const logger = createServerLogger(config);
+  const runtimeRegistry = new RuntimeRegistry();
   try {
     await reconcileLocalManagedMcpRuntimeEntries(config);
   } catch (error) {
@@ -924,6 +936,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     approvals,
     tokens,
     env,
+    runtimeRegistry,
     restartReloadWatchers,
     engineMcpServerState,
     logger,
@@ -970,9 +983,32 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
           const workspace = await resolveWorkspace(config, mount.workspaceId);
           proxyService = "opencode";
           proxyBaseUrl = workspace.baseUrl?.trim() || undefined;
+          // 注入 CLI preset agent 到 agent 列表（UI 的 agent 切换入口，含 opencode 的 /app/agents）
+          if (request.method === "GET" && isAgentListProxyPath(mount.restPath)) {
+            const response = await enrichOpencodeAgentList({
+              config,
+              request,
+              url,
+              workspace,
+              registry: runtimeRegistry,
+              proxyPath: mount.restPath,
+            });
+            return finalize(response);
+          }
+          // CLI agent prompt_async 拦截：真实启动 CLI 进程执行，不走 opencode sidecar
+          const cliResponse = await tryHandleCliAgentPromptAsync({
+            config,
+            request,
+            restPath: mount.restPath,
+            mount: { workspaceId: mount.workspaceId },
+            registry: runtimeRegistry,
+          });
+          if (cliResponse) return finalize(cliResponse);
           const response = await proxyOpencodeRequest({ config, request, url, workspace, proxyPath: mount.restPath });
           return finalize(response);
         } catch (error) {
+          // eslint-disable-next-line no-console
+          console.error("[openwork-server][workspace-opencode-mount]", url.pathname, error);
           const apiError = error instanceof ApiError
             ? error
             : new ApiError(500, "internal_error", "Unexpected server error");
@@ -1019,6 +1055,20 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
           const actor = await requireClient(request, config, tokens);
           assertOpencodeProxyAllowed(actor, request.method, url.pathname);
           proxyService = "opencode";
+          // 注入 CLI preset agent 到 agent 列表（UI 的 agent 切换入口）
+          if (request.method === "GET" && (url.pathname.endsWith("/opencode/agent") || url.pathname.endsWith("/opencode/agents"))) {
+            const response = await enrichOpencodeAgentList({ config, request, url, workspace: config.workspaces[0], registry: runtimeRegistry });
+            return finalize(response);
+          }
+          // CLI agent prompt_async 拦截（非 mount 路径，单 workspace）
+          const cliResponse = await tryHandleCliAgentPromptAsync({
+            config,
+            request,
+            restPath: url.pathname,
+            mount: null,
+            registry: runtimeRegistry,
+          });
+          if (cliResponse) return finalize(cliResponse);
           const response = await proxyOpencodeRequest({ config, request, url, workspace: config.workspaces[0] });
           return finalize(response);
         } catch (error) {
@@ -1299,6 +1349,166 @@ export async function proxyOpencodeRequest(input: {
     return withEngineDirectoryFence(input.config, workspace, forward);
   }
   return forward();
+}
+
+/**
+ * 从 prompt_async body.parts 提取文本 prompt
+ */
+function extractPromptText(parts: unknown): string {
+  if (!Array.isArray(parts)) return "";
+  return parts
+    .filter((part): part is Record<string, unknown> => typeof part === "object" && part !== null)
+    .map((part) => (part.type === "text" && typeof part.text === "string" ? part.text : ""))
+    .join("")
+    .trim();
+}
+
+/**
+ * CLI agent prompt_async 拦截（core: 让选中的 CLI agent 真实可运行）
+ *
+ * 当 prompt_async 的 body.agent 命中 CLI preset 且本机二进制可用时，
+ * 不走 opencode sidecar（opencode 不认识 kimi 等 agent，会抛 UnknownError），
+ * 而是通过 agent-sidecar 真实启动 CLI 进程执行，结果写入 cli-agent-session store。
+ *
+ * 返回 null 表示不拦截（继续走原 opencode 代理）。
+ */
+async function tryHandleCliAgentPromptAsync(input: {
+  config: ServerConfig;
+  request: Request;
+  restPath: string;
+  mount: { workspaceId: string } | null;
+  registry: RuntimeRegistry;
+}): Promise<Response | null> {
+  const { config, request, restPath, mount, registry } = input;
+  if (request.method !== "POST") return null;
+  const match = restPath.match(/\/session\/([^/]+)\/prompt_async$/);
+  if (!match) return null;
+
+  // 解析 body（clone 保留原始 body 供代理层继续使用）
+  let body: Record<string, unknown>;
+  try {
+    const cloned = request.clone();
+    body = (await cloned.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  const agentId = typeof body.agent === "string" ? body.agent : "";
+  if (!isCliAgentId(agentId)) return null;
+
+  // 二进制可用性校验：不可用则回落到 opencode 代理（给出 opencode 原始错误）
+  const capability = await registry.get(agentId);
+  if (!capability?.available) return null;
+
+  const prompt = extractPromptText(body.parts);
+  if (!prompt) return null;
+
+  const sessionId = decodeURIComponent(match[1]);
+  let workspace: WorkspaceInfo;
+  try {
+    workspace = await resolveWorkspace(config, mount?.workspaceId ?? config.workspaces[0]?.id ?? "default");
+  } catch {
+    return null;
+  }
+  const cwd = workspace.path?.trim() || process.cwd();
+
+  const result = await runCliAgentPrompt({
+    workspaceId: workspace.id,
+    sessionId,
+    agentId,
+    prompt,
+    cwd,
+  });
+  // 失败也返回 204：失败详情作为 assistant 消息写入会话，UI 可从 snapshot 展示
+  if (!result.ok) {
+    // eslint-disable-next-line no-console
+    console.warn(`[cli-agent] ${agentId} prompt failed: ${result.error}`);
+  }
+  return new Response(null, { status: 204 });
+}
+
+/**
+ * 注入 CLI preset agent 到 agent 列表（UI 的 agent 切换入口）
+ *
+ * 从 upstream 拉取原始 agent 列表后，把本机已安装的 CLI agents 合并进去，
+ * 并给上游已注册的 CLI agents 标注本机可用性（available / binaryPath / installHint）。
+ */
+async function enrichOpencodeAgentList(input: {
+  config: ServerConfig;
+  request: Request;
+  url: URL;
+  workspace: WorkspaceInfo;
+  registry: RuntimeRegistry;
+  proxyPath?: string;
+}) {
+  const { config, request, url, workspace, registry, proxyPath } = input;
+  const response = await proxyOpencodeRequest({ config, request, url, workspace, proxyPath });
+  if (!response.ok) return response;
+
+  try {
+    // clone() before json(): 读取 body 会消耗流，fallback 需要返回原始 response，
+    // 直接复用会导致 withCors 重包时抛 "Response body object should not be disturbed or locked"。
+    const upstream = await response.clone().json();
+    if (!Array.isArray(upstream)) return jsonResponse(upstream);
+
+    const upstreamNames = new Set(upstream.map((a: { name?: string }) => a?.name).filter(Boolean));
+    const detected = await registry.list();
+    // 全部 CLI preset 的本机检测结果：available/binaryPath/installHint，用于给上游 agent 列表标注"本机已安装"
+    const availability = new Map<string, { available: boolean; binaryPath?: string; installHint?: string }>();
+    for (const cap of detected) {
+      availability.set(cap.agentId, {
+        available: cap.available,
+        ...(cap.binaryPath ? { binaryPath: cap.binaryPath } : {}),
+        ...(cap.installHint ? { installHint: cap.installHint } : {}),
+      });
+    }
+    const injected = detected
+      .filter((cap) => cap.available && !upstreamNames.has(cap.agentId))
+      .map((cap) => ({
+        name: cap.agentId,
+        label: cap.label ?? cap.agentId,
+        mode: "builtin",
+        hidden: false,
+        source: "openwork",
+        available: true,
+        capabilities: cap.capabilities,
+        executionMode: cap.executionMode,
+        protocol: cap.protocol,
+        vendor: cap.vendor,
+        homepage: cap.homepage,
+        installHint: cap.installHint,
+        // CLI 内置默认模型：UI 选中该 agent 时模型选择器应对齐到此模型
+        ...(cap.defaultModel ? { model: cap.defaultModel } : {}),
+      }));
+
+    const annotatedUpstream = upstream.map((agent: Record<string, unknown>) => {
+      const name = typeof agent.name === "string" ? agent.name : "";
+      const known = availability.get(name);
+      if (!known) return agent;
+      return {
+        ...agent,
+        // 上游已注册的 CLI agent：标注本机是否已安装，前端据此禁用未安装项
+        available: known.available,
+        ...(known.binaryPath ? { binaryPath: known.binaryPath } : {}),
+        ...(known.installHint ? { installHint: known.installHint } : {}),
+      };
+    });
+
+    return jsonResponse([...annotatedUpstream, ...injected]);
+  } catch {
+    return response;
+  }
+}
+
+/**
+ * agent 列表请求判定（UI 的 agent 切换入口）。
+ *
+ * 覆盖 opencode 的 /agent、/agents 以及 opencode app 的 /app/agents（对应
+ * 前端 `app.agents()`），统一通过 normalizeOpencodeProxyPath 归一化后匹配。
+ */
+function isAgentListProxyPath(proxyPath: string): boolean {
+  const normalized = normalizeOpencodeProxyPath(proxyPath);
+  return normalized === "/agent" || normalized === "/agents" || normalized === "/app/agents";
 }
 
 function isEngineEventPath(proxyPath: string): boolean {
@@ -1863,12 +2073,14 @@ function createRoutes(
   approvals: ApprovalService,
   tokens: TokenService,
   env: EnvService,
+  runtimeRegistry: RuntimeRegistry,
   onWorkspacesChanged: () => void,
   engineMcpServerState: EngineMcpServerState,
   logger: ServerLogger,
   cloudProviderSync: CloudProviderSync,
 ): Route[] {
   const routes: Route[] = [];
+  void runtimeRegistry;
   registerCoreRoutes({
     routes,
     config,
@@ -1914,6 +2126,40 @@ function createRoutes(
     },
   });
 
+  // ============================================================
+  // team-autonomy 扩展路由（runtime-reporting / worktree / chat-bridge / space）
+  // ============================================================
+  const worktreeService = new WorktreeService();
+  const chatChannels: Record<string, import("./chat/types.js").ChatChannelAdapter> = {
+    "in-memory": new InMemoryChatChannel(),
+  };
+  const chatRelay = new ChatRelayService({ cwd: config.workspaces[0]?.path || process.cwd() });
+
+  // Surface 抽象层：内置 openwork-chat surface，作为统一聊天抽象对外暴露
+  const surfaceRegistry = createSurfaceRegistry();
+  const openWorkChatSurface = new OpenWorkChatSurface({
+    surfaceId: "openwork-chat-default",
+    deps: {
+      channel: chatChannels["in-memory"],
+      defaultScopeId: config.workspaces[0]?.id ?? "default",
+      defaultSender: "agent",
+      defaultRole: "agent",
+    },
+  });
+  surfaceRegistry.register(openWorkChatSurface);
+  void openWorkChatSurface.start();
+
+  registerAgentRuntimeRoutes({ routes, registry: runtimeRegistry, jsonResponse });
+  registerWorktreeRoutes({ routes, service: worktreeService, jsonResponse, readJsonBody });
+  registerChatRoutes({ routes, channels: chatChannels, relay: chatRelay, jsonResponse, readJsonBody });
+  registerTrajectoryRoutes({
+    routes,
+    config,
+    jsonResponse,
+    readJsonBody,
+    resolveWorkspace,
+  });
+
   registerSessionRoutes({
     routes,
     config,
@@ -1928,6 +2174,14 @@ function createRoutes(
     resolveWorkspaceWithoutBootstrap,
     createWorkspaceOpencodeClient,
     unwrapOpencodeResult,
+  });
+
+  registerSpaceRoutes({
+    routes,
+    config,
+    jsonResponse,
+    readJsonBody,
+    resolveWorkspace,
   });
 
   registerCloudMcpRoutes({
