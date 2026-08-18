@@ -21,7 +21,7 @@ import {
   jsonResponse,
   notFoundSchema,
   unauthorizedSchema,
-} from "../../../../../../apps/den-api/src/openapi.js"
+} from "../../../../../apps/den-api/src/openapi.js"
 
 import {
   authenticatedRoute,
@@ -33,9 +33,9 @@ import {
   jsonValidator,
   paramValidator,
   queryValidator,
-} from "../../apps/den-api/src/middleware/index.js"
+} from "../../../../../apps/den-api/src/middleware/index.js"
 
-import type { AuthContextVariables } from "../../apps/den-api/src/session.js"
+import type { AuthContextVariables } from "../../../../../apps/den-api/src/session.js"
 
 export type TeamAutonomyRouteVariables =
   & AuthContextVariables

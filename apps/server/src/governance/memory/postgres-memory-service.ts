@@ -150,7 +150,7 @@ export function createPostgresMemoryService(connectionString: string): MemorySer
         "SELECT seq, body, op, author, at FROM memory_revisions WHERE scope_id = $1 ORDER BY seq DESC LIMIT $2",
         [scopeId, Math.max(1, Math.min(limit, 100))],
       );
-      return rows.map((row) => ({
+      return rows.map((row: Record<string, unknown>) => ({
         revision: String(row.seq),
         content: String(row.body ?? ""),
         operation: String(row.op),

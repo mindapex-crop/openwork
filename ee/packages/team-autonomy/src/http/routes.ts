@@ -21,6 +21,7 @@ import { registerTeamBoardRoutes } from "./handlers/boards.js"
 import { registerTeamInboxRoutes } from "./handlers/inbox.js"
 import { registerTeamPermissionRoutes } from "./handlers/permissions.js"
 import { registerTeamTaskRoutes } from "./handlers/tasks.js"
+import { registerTeamListRoutes } from "./handlers/teams.js"
 
 export type { TeamAutonomyRouteVariables }
 
@@ -43,6 +44,7 @@ export function registerTeamAutonomyRoutes<T extends { Variables: TeamAutonomyRo
     registerTeamAutomationRoutes as AnyRouteRegistrar,
     registerTeamInboxRoutes as AnyRouteRegistrar,
     registerTeamPermissionRoutes as AnyRouteRegistrar,
+    registerTeamListRoutes as AnyRouteRegistrar,
   ]
   for (const register of registrars) {
     try {

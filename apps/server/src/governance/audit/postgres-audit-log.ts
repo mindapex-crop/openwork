@@ -67,7 +67,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
         e.detail ?? null,
       ])
         .then(() => undefined)
-        .catch((err) => console.error("[audit] failed to persist event to durable store:", err));
+        .catch((err: unknown) => console.error("[audit] failed to persist event to durable store:", err));
       pendingWrites.add(write);
       void write.finally(() => pendingWrites.delete(write));
     },

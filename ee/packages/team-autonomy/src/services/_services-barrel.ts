@@ -22,16 +22,16 @@
  * after service files are moved into this package). No more ts-nocheck.
  */
 
-export * from "../../apps/den-api/src/team-autonomy/asset-service.js";
-export * from "../../apps/den-api/src/team-autonomy/automation-service.js";
-export * from "../../apps/den-api/src/team-autonomy/budget-service.js";
-export * from "../../apps/den-api/src/team-autonomy/inbox-service.js";
-export * from "../../apps/den-api/src/team-autonomy/mailbox-service.js";
-export * from "../../apps/den-api/src/team-autonomy/permission-service.js";
-export * from "../../apps/den-api/src/team-autonomy/personal-team-service.js";
-export * from "../../apps/den-api/src/team-autonomy/sidecar-service.js";
-export * from "../../apps/den-api/src/team-autonomy/skill-validation-service.js";
-export * from "../../apps/den-api/src/team-autonomy/task-service.js";
-export * from "../../apps/den-api/src/team-autonomy/team-agent-service.js";
+export * from "../../../../apps/den-api/src/team-autonomy/asset-service.js";
+export * from "../../../../apps/den-api/src/team-autonomy/automation-service.js";
+export * from "../../../../apps/den-api/src/team-autonomy/budget-service.js";
+export * from "../../../../apps/den-api/src/team-autonomy/inbox-service.js";
+export * from "../../../../apps/den-api/src/team-autonomy/mailbox-service.js";
+export * from "../../../../apps/den-api/src/team-autonomy/permission-service.js";
+export * from "../../../../apps/den-api/src/team-autonomy/personal-team-service.js";
+export * from "../../../../apps/den-api/src/team-autonomy/sidecar-service.js";
+export * from "../../../../apps/den-api/src/team-autonomy/skill-validation-service.js";
+export * from "../../../../apps/den-api/src/team-autonomy/task-service.js";
+export * from "../../../../apps/den-api/src/team-autonomy/team-agent-service.js";
 export * from "./personal-team-ensure.js";
-export * from "../../apps/den-api/src/team-autonomy/scheduler-worker.js";
+export * from "../../../../apps/den-api/src/team-autonomy/scheduler-worker.js";

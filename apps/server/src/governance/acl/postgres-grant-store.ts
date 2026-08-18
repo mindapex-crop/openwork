@@ -94,7 +94,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
           a.grantedBy === b.grantedBy;
         if (
           current.length !== expected.length ||
-          current.some((grant) => !expected.some((candidate) => sameTuple(grant, candidate)))
+          current.some((grant: Grant) => !expected.some((candidate) => sameTuple(grant, candidate)))
         ) {
           await client.query("ROLLBACK");
           return false;

@@ -2,7 +2,7 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
-import { Cloud, FileText, Globe, Mic2, MoreHorizontal, PanelRight, TextSearch, Zap } from "lucide-react";
+import { Cloud, FileText, Globe, Kanban, Mic2, MoreHorizontal, PanelRight, TextSearch, Zap } from "lucide-react";
 
 import { resolveExtensionIconSrc } from "@/react-app/design-system/extension-icon-src";
 import { t } from "../../../../i18n";
@@ -82,6 +82,7 @@ import { isElectronRuntime } from "../../../../app/utils";
 import { isCollectibleArtifactTarget, isLocalhostBrowserTarget, isOpenableFileTarget, type OpenTarget } from "../artifacts/open-target";
 import type { OpenTargetOptions } from "@/lib/target-provider";
 import { VoicePanel } from "../voice/voice-panel";
+import { TeamBoardPanel } from "../team/team-board-panel";
 import { SidePanel } from "../panel/side-panel";
 import { getSidePanelSessionKey } from "../panel/side-panel-session";
 import { TerminalDock } from "../terminal/terminal-dock";
@@ -361,6 +362,12 @@ export function SessionPage(props: SessionPageProps) {
     [],
   );
   const voiceExtensionEnabled = voiceExtension ? isOpenWorkExtensionEnabled(voiceExtension) : false;
+  const teamExtension = useMemo(
+    () => OPENWORK_EXTENSION_CATALOG.find((entry) => getExtensionId(entry) === "openwork-team-autonomy") ?? null,
+    [],
+  );
+  const teamExtensionEnabled = teamExtension ? isOpenWorkExtensionEnabled(teamExtension) : false;
+  const teamRailActive = activeSidePanel === "team";
   const showCloudSignIn = shellConfig.cloudSignin && !denAuth.isSignedIn && denAuth.status !== "checking";
   const openCloudSignIn = useCallback(() => {
     const baseUrl = readDenBootstrapConfig().baseUrl;
@@ -631,6 +638,9 @@ export function SessionPage(props: SessionPageProps) {
   const openVoiceRailPane = useCallback(() => {
     toggleCurrentSidePanel("voice");
   }, [toggleCurrentSidePanel]);
+  const openTeamRailPane = useCallback(() => {
+    toggleCurrentSidePanel("team");
+  }, [toggleCurrentSidePanel]);
   const removeAccessibleTarget = useCallback((target: OpenTarget) => {
     const nextHiddenIds = new Set(hiddenAccessibleTargetIds);
     nextHiddenIds.add(target.id);
@@ -679,6 +689,11 @@ export function SessionPage(props: SessionPageProps) {
       setCurrentSidePanel(null);
     }
   }, [activeSidePanel, setCurrentSidePanel, voiceExtensionEnabled]);
+  useEffect(() => {
+    if (activeSidePanel === "team" && !teamExtensionEnabled) {
+      setCurrentSidePanel(null);
+    }
+  }, [activeSidePanel, setCurrentSidePanel, teamExtensionEnabled]);
 
   const openVoicePanelControlAction = useMemo<OpenworkControlAction | null>(() => (
     voiceExtensionEnabled ? {
@@ -1492,6 +1507,8 @@ export function SessionPage(props: SessionPageProps) {
                       sessionId={props.selectedSessionId}
                       onClose={closeRightPane}
                     />
+                  ) : activeSidePanel === "team" ? (
+                    <TeamBoardPanel onClose={closeRightPane} />
                   ) : activeSidePanel === "panel" ? (
                     <SidePanel
                       sessionId={sidePanelSessionKey}
@@ -1535,6 +1552,8 @@ export function SessionPage(props: SessionPageProps) {
                         sessionId={props.selectedSessionId}
                         onClose={closeRightPane}
                       />
+                    ) : activeSidePanel === "team" ? (
+                      <TeamBoardPanel onClose={closeRightPane} />
                     ) : activeSidePanel === "panel" ? (
                       <SidePanel
                         sessionId={sidePanelSessionKey}
@@ -1584,6 +1603,22 @@ export function SessionPage(props: SessionPageProps) {
                 aria-pressed={voiceRailActive}
               >
                 <Mic2 size={15} />
+              </Button>
+            ) : null}
+            {teamExtensionEnabled ? (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className={cn(
+                  "rounded-xl transition-colors hover:bg-muted hover:text-foreground",
+                  teamRailActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
+                )}
+                onClick={openTeamRailPane}
+                title="Team Board"
+                aria-label="Team Board"
+                aria-pressed={teamRailActive}
+              >
+                <Kanban size={15} />
               </Button>
             ) : null}
             <Button
