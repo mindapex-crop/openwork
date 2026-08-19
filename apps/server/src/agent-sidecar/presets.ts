@@ -106,6 +106,26 @@ export interface AgentPreset extends AgentSidecarConfig {
    * 注入 agent 列表时透传给 UI：选中该 CLI agent 后，模型选择器应显示此模型而非 opencode 的全局模型。
    */
   defaultModel?: { providerID: string; modelID: string };
+  /**
+   * 运行时模型发现配置
+   *
+   * 各 CLI agent 列出可用模型的方式不同：
+   * - kimi: `kimi models --json` 或读取 ~/.kimi-code/config.toml
+   * - claude: `claude --list-models` 或读取 ~/.claude/settings.json
+   * - codex: `codex models list --json` 或读取 config
+   *
+   * 通过此配置让 runtime discovery 按需 spawn 短进程获取模型列表。
+   */
+  modelDiscovery?: {
+    /** CLI 子命令：如 ["models", "--json"]、["--list-models"] */
+    command?: string[];
+    /** 解析后每个模型的 providerID 映射（用于统一命名） */
+    providerMap?: Record<string, string>;
+    /** 配置文件路径模板（用 ${HOME} 占位），用于 fallback 读取 */
+    configPaths?: string[];
+    /** 超时毫秒数（默认 10_000） */
+    timeoutMs?: number;
+  };
 }
 
 /**
@@ -161,6 +181,11 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     installHint: "curl -fsSL https://kimi.com/code/install.sh | bash",
     // kimi CLI 内置默认模型（config.toml default_model），与 opencode 模型选择无关
     defaultModel: { providerID: "kimi", modelID: "kimi-code/k3" },
+    modelDiscovery: {
+      command: ["models", "--json"],
+      configPaths: ["${HOME}/.kimi-code/config.toml"],
+      timeoutMs: 10_000,
+    },
     // 优先 ACP；ACP 因认证/启动失败时自动降级 headless-oneshot（kimi -p）→ PTY
     preferProtocolOrder: ["acp", "headless-oneshot", "pty"],
     altPresets: [
@@ -445,6 +470,11 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     executionMode: "headless-oneshot",
     // Claude Code 默认模型（官方默认 Claude Sonnet 4）
     defaultModel: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
+    modelDiscovery: {
+      command: ["--list-models"],
+      configPaths: ["${HOME}/.claude/settings.json"],
+      timeoutMs: 15_000,
+    },
   },
 
   codex: {
@@ -455,7 +485,7 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     protocol: "pty",
     binary: "codex",
     args: [],
-    capabilities: PTY_DEFAULT_CAPS,
+    capabilities: { ...PTY_DEFAULT_CAPS, goal: true },
     env: { TERM: "xterm-256color" },
     cliProfile: {
       headless: true,
@@ -466,6 +496,38 @@ export const AGENT_PRESETS: Record<string, AgentPreset> = {
     executionMode: "headless-oneshot",
     // Codex CLI 默认模型
     defaultModel: { providerID: "openai", modelID: "gpt-5-codex" },
+    modelDiscovery: {
+      command: ["models", "list", "--json"],
+      configPaths: ["${HOME}/.codex/config.yaml"],
+      timeoutMs: 10_000,
+    },
+  },
+
+  "codex-goal": {
+    agentId: "codex-goal",
+    label: "Codex (Goal-Driven)",
+    vendor: "openai",
+    homepage: "https://github.com/openai/codex",
+    protocol: "pty",
+    binary: "codex",
+    args: [],
+    capabilities: { ...PTY_DEFAULT_CAPS, goal: true },
+    env: { TERM: "xterm-256color" },
+    cliProfile: {
+      headless: true,
+      headlessArgs: ["exec", "--json"],
+      outputFormats: ["json"],
+    },
+    preferProtocolOrder: ["headless-oneshot", "pty"],
+    executionMode: "headless-oneshot",
+    goal: true,
+    // Codex CLI 默认模型
+    defaultModel: { providerID: "openai", modelID: "gpt-5-codex" },
+    modelDiscovery: {
+      command: ["models", "list", "--json"],
+      configPaths: ["${HOME}/.codex/config.yaml"],
+      timeoutMs: 10_000,
+    },
   },
 
   "cursor-agent": {

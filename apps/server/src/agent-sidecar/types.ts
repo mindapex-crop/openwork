@@ -152,6 +152,8 @@ export interface SidecarCapabilities {
   mcpClient?: boolean;
   /** 文档同步（编辑器 ↔ agent） */
   documentSync?: boolean;
+  /** 目标驱动执行（agent 声明目标并持续迭代直到满足） */
+  goal?: boolean;
 }
 
 /** Agent 配置（持久化用，借鉴 cc-connect [[projects]] + multica presets） */
