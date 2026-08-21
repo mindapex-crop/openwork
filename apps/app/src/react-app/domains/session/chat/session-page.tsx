@@ -82,7 +82,7 @@ import { isElectronRuntime } from "../../../../app/utils";
 import { isCollectibleArtifactTarget, isLocalhostBrowserTarget, isOpenableFileTarget, type OpenTarget } from "../artifacts/open-target";
 import type { OpenTargetOptions } from "@/lib/target-provider";
 import { VoicePanel } from "../voice/voice-panel";
-import { TeamBoardPanel } from "../team/team-board-panel";
+import { TeamPanel } from "../team/team-mode-panel";
 import { SidePanel } from "../panel/side-panel";
 import { getSidePanelSessionKey } from "../panel/side-panel-session";
 import { TerminalDock } from "../terminal/terminal-dock";
@@ -1508,7 +1508,7 @@ export function SessionPage(props: SessionPageProps) {
                       onClose={closeRightPane}
                     />
                   ) : activeSidePanel === "team" ? (
-                    <TeamBoardPanel onClose={closeRightPane} />
+                    <TeamPanel onClose={closeRightPane} />
                   ) : activeSidePanel === "panel" ? (
                     <SidePanel
                       sessionId={sidePanelSessionKey}
@@ -1553,7 +1553,7 @@ export function SessionPage(props: SessionPageProps) {
                         onClose={closeRightPane}
                       />
                     ) : activeSidePanel === "team" ? (
-                      <TeamBoardPanel onClose={closeRightPane} />
+                      <TeamPanel onClose={closeRightPane} />
                     ) : activeSidePanel === "panel" ? (
                       <SidePanel
                         sessionId={sidePanelSessionKey}
@@ -1614,8 +1614,8 @@ export function SessionPage(props: SessionPageProps) {
                   teamRailActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
                 )}
                 onClick={openTeamRailPane}
-                title="Team Board"
-                aria-label="Team Board"
+                title="Team Mode"
+                aria-label="Team Mode"
                 aria-pressed={teamRailActive}
               >
                 <Kanban size={15} />

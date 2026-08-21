@@ -81,3 +81,22 @@ export function getCliAgentSupportedModels(agentId: string, defaultModel?: Model
 export function isCliModelSupported(model: ModelRef, supported: ModelRef[]): boolean {
   return supported.some((m) => cliModelMatches(m, model));
 }
+
+/** Remove an optional model from a CLI agent's allowlist. */
+export function deleteCliAgentOptionalModel(agentId: string, model: ModelRef): ModelRef[] {
+  const all = readAll();
+  const list = all[agentId] ?? [];
+  const next = list.filter((m) => !cliModelMatches(m, model));
+  if (next.length === 0) {
+    delete all[agentId];
+  } else {
+    all[agentId] = next;
+  }
+  writeAll(all);
+  return next;
+}
+
+/** Whether a model is a user-registered optional (vs. baked-in default). */
+export function isCliModelOptional(agentId: string, model: ModelRef): boolean {
+  return getCliAgentOptionalModels(agentId).some((m) => cliModelMatches(m, model));
+}

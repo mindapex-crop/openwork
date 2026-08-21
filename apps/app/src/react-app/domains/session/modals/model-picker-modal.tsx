@@ -34,7 +34,9 @@ import { t } from "@/i18n";
 import {
   addCliAgentOptionalModel,
   cliModelMatches,
+  deleteCliAgentOptionalModel,
   getCliAgentSupportedModels,
+  isCliModelOptional,
 } from "./cli-agent-model-store";
 import { readDenSettings } from "@/app/lib/den";
 import { modelEquals, resolveProviderDisplayName } from "../../../../app/utils";
@@ -167,12 +169,13 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
     () => (props.agentId ? props.agentId.charAt(0).toUpperCase() + props.agentId.slice(1) : ""),
     [props.agentId],
   );
+  const [, forceStoreRefresh] = useState(0);
   // The set of models this CLI agent can currently run: its built-in default
   // plus any optional models the user has registered via this dialog.
-  const supportedRefs = useMemo<ModelRef[]>(
-    () => (props.agentId ? getCliAgentSupportedModels(props.agentId, props.agentDefaultModel ?? undefined) : []),
-    [props.agentId, props.agentDefaultModel],
-  );
+  const supportedRefs = useMemo<ModelRef[]>(() => {
+    void forceStoreRefresh;
+    return props.agentId ? getCliAgentSupportedModels(props.agentId, props.agentDefaultModel ?? undefined) : [];
+  }, [props.agentId, props.agentDefaultModel, forceStoreRefresh]);
   const supportedSet = useMemo(
     () => new Set(supportedRefs.map((m) => `${m.providerID}/${m.modelID}`)),
     [supportedRefs],
@@ -187,6 +190,7 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
   // single provider-grouped view is kept.
   const [view, setView] = useState<"provider" | "model">("provider");
   const [confirmModel, setConfirmModel] = useState<ModelOption | null>(null);
+  const [deleteModel, setDeleteModel] = useState<ModelRef | null>(null);
 
   // Filter by search (declared before the agent-aware memos that consume it)
   const filteredOptions = useMemo(() => {
@@ -265,11 +269,24 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
         providerID: confirmModel.providerID,
         modelID: confirmModel.modelID,
       });
+      forceStoreRefresh((n) => n + 1);
       props.onSelect({ providerID: confirmModel.providerID, modelID: confirmModel.modelID });
     }
     setConfirmModel(null);
   }, [confirmModel, props]);
   const cancelConfirm = useCallback(() => setConfirmModel(null), []);
+
+  const requestDelete = useCallback((ref: ModelRef) => {
+    setDeleteModel(ref);
+  }, []);
+  const confirmDelete = useCallback(() => {
+    if (props.agentId && deleteModel) {
+      deleteCliAgentOptionalModel(props.agentId, deleteModel);
+      forceStoreRefresh((n) => n + 1);
+    }
+    setDeleteModel(null);
+  }, [deleteModel, props.agentId]);
+  const cancelDelete = useCallback(() => setDeleteModel(null), []);
 
   // Reset on open
   useEffect(() => {
@@ -575,6 +592,8 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
                         current={props.current}
                         onSelect={handleSelect}
                         supportedLabel={isModelSupported(opt.providerID, opt.modelID) ? agentLabel : undefined}
+                        isOptional={Boolean(props.agentId) && isCliModelOptional(props.agentId!, { providerID: opt.providerID, modelID: opt.modelID })}
+                        onDelete={props.agentId ? () => requestDelete({ providerID: opt.providerID, modelID: opt.modelID }) : undefined}
                       />
                     ))
                   )}
@@ -587,6 +606,8 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
                       options={agentSupportedOptions}
                       current={props.current}
                       onSelect={handleSelect}
+                      agentId={props.agentId ?? undefined}
+                      onDeleteModel={requestDelete}
                     />
                   ) : null}
                   {providerGroups.map((group) => (
@@ -602,6 +623,8 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
                       organizationProviderLabel={organizationProviderLabel}
                       supportsAgentLabel={hasAgentContext ? agentLabel : undefined}
                       isModelSupported={isModelSupported}
+                      agentId={props.agentId ?? undefined}
+                      onDeleteModel={requestDelete}
                     />
                   ))}
                 </div>
@@ -634,6 +657,23 @@ export function ModelPickerModal(props: ModelPickerModalProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Confirm removing an optional model from the active CLI agent. */}
+      <AlertDialog open={deleteModel !== null} onOpenChange={(open) => { if (!open) setDeleteModel(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this model from {agentLabel}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong>{deleteModel?.providerID}/{deleteModel?.modelID}</strong> will no longer be available within
+              {" "}{agentLabel}. You can add it back later from any provider.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelDelete}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete}>Remove</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }
@@ -653,6 +693,8 @@ function ProviderAccordion({
   organizationProviderLabel,
   supportsAgentLabel,
   isModelSupported,
+  agentId,
+  onDeleteModel,
 }: {
   group: ProviderGroup;
   expanded: boolean;
@@ -664,6 +706,8 @@ function ProviderAccordion({
   organizationProviderLabel: string;
   supportsAgentLabel?: string;
   isModelSupported?: (providerID: string, modelID: string) => boolean;
+  agentId?: string;
+  onDeleteModel?: (ref: ModelRef) => void;
 }) {
   const totalModels = group.recommended.length + group.other.length;
   const Chevron = expanded ? ChevronDown : ChevronRight;
@@ -727,7 +771,17 @@ function ProviderAccordion({
                 Recommended
               </div>
               {group.recommended.map((opt) => (
-                <DefaultModelRow key={opt.modelID} opt={opt} current={current} onSelect={onSelect} recommended supported={supportedFor(opt)} supportedLabel={supportsAgentLabel} />
+                <DefaultModelRow
+                  key={opt.modelID}
+                  opt={opt}
+                  current={current}
+                  onSelect={onSelect}
+                  recommended
+                  supported={supportedFor(opt)}
+                  supportedLabel={supportsAgentLabel}
+                  isOptional={Boolean(agentId) && isCliModelOptional(agentId!, { providerID: opt.providerID, modelID: opt.modelID })}
+                  onDelete={onDeleteModel ? () => onDeleteModel({ providerID: opt.providerID, modelID: opt.modelID }) : undefined}
+                />
               ))}
             </>
           ) : null}
@@ -739,7 +793,16 @@ function ProviderAccordion({
                 </div>
               ) : null}
               {group.other.map((opt) => (
-                <DefaultModelRow key={opt.modelID} opt={opt} current={current} onSelect={onSelect} supported={supportedFor(opt)} supportedLabel={supportsAgentLabel} />
+                <DefaultModelRow
+                  key={opt.modelID}
+                  opt={opt}
+                  current={current}
+                  onSelect={onSelect}
+                  supported={supportedFor(opt)}
+                  supportedLabel={supportsAgentLabel}
+                  isOptional={Boolean(agentId) && isCliModelOptional(agentId!, { providerID: opt.providerID, modelID: opt.modelID })}
+                  onDelete={onDeleteModel ? () => onDeleteModel({ providerID: opt.providerID, modelID: opt.modelID }) : undefined}
+                />
               ))}
             </>
           ) : null}
@@ -754,33 +817,50 @@ function ProviderAccordion({
 /* ------------------------------------------------------------------ */
 
 function DefaultModelRow({
-  opt, current, onSelect, recommended, supported, supportedLabel,
+  opt, current, onSelect, recommended, supported, supportedLabel, isOptional, onDelete,
 }: {
-  opt: ModelOption; current: ModelRef; onSelect: (opt: ModelOption) => void; recommended?: boolean; supported?: boolean; supportedLabel?: string;
+  opt: ModelOption; current: ModelRef; onSelect: (opt: ModelOption) => void; recommended?: boolean; supported?: boolean; supportedLabel?: string; isOptional?: boolean; onDelete?: () => void;
 }) {
   const active = modelEquals(current, { providerID: opt.providerID, modelID: opt.modelID });
 
   return (
-    <button
-      type="button"
-      className={[
-        "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors",
-        active ? "bg-green-3/50" : "hover:bg-dls-hover",
-      ].join(" ")}
-      onClick={() => onSelect(opt)}
-    >
-      {recommended ? <Star size={12} className="shrink-0 text-amber-9" /> : <div className="w-3 shrink-0" />}
-      <div className="min-w-0 flex-1">
-        <span className={["text-[12px]", active ? "font-medium text-dls-text" : "text-dls-text"].join(" ")}>{opt.title}</span>
-        <span className="ml-2 font-mono text-[10px] text-dls-secondary/60">{opt.modelID}</span>
-      </div>
-      {supported && supportedLabel ? (
-        <span className="shrink-0 rounded-md bg-green-3 px-1.5 py-0.5 text-[10px] font-medium text-green-11">
-          {supportedLabel}
-        </span>
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        className={[
+          "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors",
+          active ? "bg-green-3/50" : "hover:bg-dls-hover",
+        ].join(" ")}
+        onClick={() => onSelect(opt)}
+      >
+        {recommended ? <Star size={12} className="shrink-0 text-amber-9" /> : <div className="w-3 shrink-0" />}
+        <div className="min-w-0 flex-1">
+          <span className={["text-[12px]", active ? "font-medium text-dls-text" : "text-dls-text"].join(" ")}>{opt.title}</span>
+          <span className="ml-2 font-mono text-[10px] text-dls-secondary/60">{opt.modelID}</span>
+        </div>
+        {supported && supportedLabel ? (
+          <span className="shrink-0 rounded-md bg-green-3 px-1.5 py-0.5 text-[10px] font-medium text-green-11">
+            {supportedLabel}
+          </span>
+        ) : null}
+        {isOptional ? (
+          <span className="shrink-0 rounded-md bg-blue-3 px-1.5 py-0.5 text-[10px] font-medium text-blue-11">
+            Optional
+          </span>
+        ) : null}
+        {active ? <Check size={14} className="shrink-0 text-green-11" /> : null}
+      </button>
+      {onDelete && isOptional ? (
+        <button
+          type="button"
+          aria-label={`Remove ${opt.modelID}`}
+          className="shrink-0 rounded-md p-1 text-dls-secondary transition-colors hover:bg-dls-hover hover:text-red-11"
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        >
+          <X size={12} />
+        </button>
       ) : null}
-      {active ? <Check size={14} className="shrink-0 text-green-11" /> : null}
-    </button>
+    </div>
   );
 }
 
@@ -793,11 +873,15 @@ function AgentSupportedSection({
   options,
   current,
   onSelect,
+  agentId,
+  onDeleteModel,
 }: {
   agentLabel: string;
   options: ModelOption[];
   current: ModelRef;
   onSelect: (opt: ModelOption) => void;
+  agentId?: string;
+  onDeleteModel?: (ref: ModelRef) => void;
 }) {
   return (
     <div className="rounded-xl border border-green-6/50 bg-green-2/20 px-2 py-1.5">
@@ -812,6 +896,8 @@ function AgentSupportedSection({
             current={current}
             onSelect={onSelect}
             recommended
+            isOptional={Boolean(agentId) && isCliModelOptional(agentId!, { providerID: opt.providerID, modelID: opt.modelID })}
+            onDelete={onDeleteModel ? () => onDeleteModel({ providerID: opt.providerID, modelID: opt.modelID }) : undefined}
           />
         ))}
       </div>

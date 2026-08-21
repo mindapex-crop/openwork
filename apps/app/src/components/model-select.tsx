@@ -5,6 +5,7 @@ import { ChevronDown, Settings2 } from "lucide-react";
 import { useNavigate } from "react-router";
 
 import type { ModelOption, ModelRef } from "@/app/types";
+import { resolveProviderDisplayName } from "@/app/utils";
 import { ProviderIcon } from "@/react-app/design-system/provider-icon";
 import {
   Popover,
@@ -271,10 +272,34 @@ export function ModelSelect({
     (option: ModelOption) => supportedSet.has(`${option.providerID}/${option.modelID}`),
     [supportedSet],
   );
-  const agentSupportedOptions = React.useMemo(
-    () => (hasAgentContext ? modelOptions.filter((option) => isSupported(option)) : []),
-    [hasAgentContext, isSupported, modelOptions],
-  );
+  // Synthesize ModelOption entries for the CLI agent's supported models so the
+  // pinned group shows them even when their provider is not (yet) a connected
+  // source (e.g. kimi-code/k3 lives in the CLI agent's own config.toml).
+  const agentSupportedOptions = React.useMemo<ModelOption[]>(() => {
+    if (!hasAgentContext) return [];
+    const byKey = new Map<string, ModelOption>();
+    for (const option of modelOptions) byKey.set(`${option.providerID}/${option.modelID}`, option);
+    return supportedRefs
+      .map((ref) => {
+        const existing = byKey.get(`${ref.providerID}/${ref.modelID}`);
+        if (existing) return existing;
+        return {
+          providerID: ref.providerID,
+          modelID: ref.modelID,
+          title: ref.modelID,
+          description: resolveProviderDisplayName(ref.providerID),
+          behaviorTitle: "Reasoning",
+          behaviorLabel: "Default",
+          behaviorDescription: "",
+          behaviorValue: null,
+          isFree: false,
+        };
+      })
+      .filter(
+        (option, index, arr) =>
+          arr.findIndex((o) => o.providerID === option.providerID && o.modelID === option.modelID) === index,
+      );
+  }, [hasAgentContext, modelOptions, supportedRefs]);
   const [confirmModel, setConfirmModel] = React.useState<ModelOption | null>(null);
   const requestSelect = React.useCallback(
     (option: ModelOption) => {

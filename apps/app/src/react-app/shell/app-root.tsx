@@ -385,6 +385,7 @@ export function AppRoot() {
 
   return (
     <>
+      <div className="ow-ambient-bg" aria-hidden="true" />
       <DevProfiler id="AppRoot">
         <ShellConfigProvider>
         <AppMenuProvider>
