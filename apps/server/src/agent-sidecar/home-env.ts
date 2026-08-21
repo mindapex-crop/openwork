@@ -8,14 +8,17 @@
  * 上还会访问 $HOME/Library/Keychains/login.keychain-db）在隔离 HOME 下
  * 找不到登录态，甚至触发系统"找不到钥匙串"弹窗。
  *
- * Electron 启动时已把真实 HOME 存入 OPENWORK_REAL_HOME。本函数返回一个 env
- * 覆盖片段，注入到所有 CLI agent 的 spawn env，恢复真实 HOME。
- * 非 dev 模式（无 OPENWORK_REAL_HOME，或 HOME 本来就是真实 HOME）返回
- * undefined，调用方合并后无副作用。
+ * Electron 启动时会把真实 HOME 存入 OPENWORK_REAL_HOME（runtime.mjs
+ * buildChildEnv dev 分支）。兜底逻辑：即使该变量未设置，也从系统用户库
+ * 读取真实 home（os.userInfo().homedir 读 getpwuid，不受 $HOME 覆盖影响），
+ * 保证 CLI agent 始终能读到用户已登录的配置。
+ * 非 dev 模式（当前 HOME 已是真实 HOME）返回 undefined，调用方合并后无副作用。
  */
 
+import os from "node:os";
+
 export function restoreRealHomeEnv(): Record<string, string> | undefined {
-  const realHome = process.env.OPENWORK_REAL_HOME?.trim();
+  const realHome = process.env.OPENWORK_REAL_HOME?.trim() || os.userInfo().homedir;
   if (!realHome) return undefined;
   const currentHome = process.env.HOME ?? "";
   // 当前 HOME 已是真实 HOME（非 dev 隔离）时无需覆盖

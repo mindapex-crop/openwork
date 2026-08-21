@@ -126,6 +126,12 @@ export interface AgentPreset extends AgentSidecarConfig {
     /** 超时毫秒数（默认 10_000） */
     timeoutMs?: number;
   };
+  /** Whether this CLI agent has plan/act paired execution built-in. */
+  planAct?: boolean;
+  /** Whether this CLI agent supports relay/pipeline mode. */
+  relay?: boolean;
+  /** Agent-level goal capability (if absent, inherit from capabilities). */
+  goal?: boolean;
 }
 
 /**

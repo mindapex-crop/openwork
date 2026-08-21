@@ -21,11 +21,21 @@ import type {
   SidecarCapabilities,
   SidecarHandle,
 } from "../agent-sidecar/types.js";
+import type { MergeOptions, MergeResult, WorktreeDiff } from "./worktree-manager.js";
 
-// Re-export AgentEvent for downstream consumers (relay.ts, team.ts, etc.)
-export type { AgentEvent } from "../agent-sidecar/types.js";
-// Re-export AgentSidecarAdapter for consumers that bridge agent-team types with sidecar adapters (e2e.test.ts)
-export type { AgentSidecarAdapter } from "../agent-sidecar/types.js";
+// Re-export for downstream consumers
+export type { AgentEvent, AgentSidecarAdapter };
+
+// Re-export new modules
+export type { WorktreeInfo, WorktreeConfig, MergeStrategy, MergeOptions, MergeResult, WorktreeDiff } from "./worktree-manager.js";
+export type { AgentMessage, AgentMessageType } from "./message-bus.js";
+export type { SupervisorConfig, SupervisorDecision, SubTaskAssignment } from "./supervisor.js";
+export type { ModelCostConfig, RoleModelRecommendation } from "./cost-efficiency-router.js";
+export type { PlanActConfig, PlanPhaseResult, ActPhaseResult, PlanActRunOptions } from "./plan-act.js";
+export type { SshTunnelConfig, SshTunnelHandle } from "./ssh-relay.js";
+export type { CloudContextEntry, CloudSessionState, CloudContextHandle, CloudContextStoreOptions } from "./cloud-context.js";
+export type { TeamStrategyId, TeamStrategyMeta, TeamStrategyConfig } from "./team-strategies.js";
+export type { HarnessKind, HarnessCapabilities, HarnessHealth, HarnessDefinition } from "./harness-environment.js";
 
 // ============================================================
 // Team 成员与配置
@@ -59,7 +69,8 @@ export type DispatchPolicy =
   | { kind: "first-available" }
   | { kind: "capability-match"; required: Partial<SidecarCapabilities> }
   | { kind: "primary-with-fallback"; primary: string; fallbacks: string[] }
-  | { kind: "role-based"; role: MemberRole };
+  | { kind: "role-based"; role: MemberRole }
+  | { kind: "llm-supervisor"; model: string; providerID: string; prompt?: string };
 
 /** 接力策略 */
 export type RelayStrategy =
@@ -83,6 +94,32 @@ export interface AgentTeamConfig {
   eagerStart?: boolean;
   /** 启动超时（毫秒），默认 30000 */
   startupTimeoutMs?: number;
+
+  // ===== Worktree 隔离配置 =====
+  /** 是否启用 worktree 隔离（默认 true） */
+  worktreeIsolation?: boolean;
+  /** worktree 基准分支（默认 "main"） */
+  worktreeBaseBranch?: string;
+  /** worktree 目录前缀 */
+  worktreePrefix?: string;
+
+  // ===== 模型分配配置 =====
+  /** 按角色分配模型（覆盖默认 CostEfficiencyRouter 推荐） */
+  roleModels?: Partial<Record<MemberRole, { providerID: string; modelID: string }>>;
+  /** 预算上限（美元/1M tokens） */
+  maxCostPerMillion?: number;
+
+  // ===== 共享上下文 =====
+  /** 所有 agent 共享的系统提示 */
+  sharedSystemPrompt?: string;
+  /** 共享的上下文文件路径（注入到每个 agent 的 prompt） */
+  sharedContextFiles?: string[];
+  /** 共享变量（注入到每个 agent 的环境） */
+  sharedVariables?: Record<string, string>;
+
+  // ===== 进程池配置 =====
+  /** 是否使用全局 SidecarProcessPool（默认 true） */
+  useProcessPool?: boolean;
 }
 
 // ============================================================
@@ -197,4 +234,32 @@ export interface AgentTeamHandle {
   ensureMemberStarted(agentId: string): Promise<SidecarHandle>;
   /** 停止所有成员 */
   stop(): Promise<void>;
+
+  // ===== 新增：Worktree 隔离 =====
+  /** 获取指定 agent 的 worktree 路径（cwd） */
+  getAgentCwd(agentId: string, baseCwd: string): string;
+  /** 获取所有 worktree 信息 */
+  listWorktrees(): Array<{ path: string; agentId: string; isGitWorktree: boolean }>;
+  /** 获取指定 worktree 的变更差异 */
+  getWorktreeDiff?(worktreePath: string): WorktreeDiff;
+  /** 合并所有 worktree 变更回目标分支 */
+  mergeWorktrees?(options?: MergeOptions): MergeResult;
+
+  // ===== 新增：消息总线 =====
+  /** 发送 agent 间消息 */
+  sendMessage(msg: { fromAgentId: string; toAgentId: string; content: string; type?: "direct" | "broadcast" | "system" }): Promise<{ id: string }>;
+  /** 订阅发往指定 agent 的消息 */
+  subscribeMessages(agentId: string, handler: (msg: { id: string; fromAgentId: string; content: string; type: string }) => void): () => void;
+
+  // ===== 新增：Supervisor =====
+  /** 使用 LLM Supervisor 分解任务为子任务 */
+  decomposeTask(taskPrompt: string): Promise<Array<{ subtaskId: string; agentId: string; prompt: string; dependencies: string[] }>>;
+  /** 使用 LLM Supervisor 选择最优 agent */
+  coordinateTask(taskPrompt: string): Promise<string>;
+
+  // ===== 新增：Kill-switch =====
+  /** 强制停止指定 agent（kill-switch） */
+  killAgent(agentId: string): Promise<void>;
+  /** 获取 team 运行状态 */
+  getStatus(): { teamId: string; alive: boolean; memberCount: number; activeTasks: number };
 }

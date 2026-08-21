@@ -7,6 +7,7 @@
  * - capability-match: 按能力筛选（如需要 streaming + permissions）
  * - primary-with-fallback: 主力 → 备选（接力失败时启用）
  * - role-based: 按角色筛选
+ * - llm-supervisor: LLM 动态路由（实际决策在 team.ts 的 dispatchTask 中处理，此处降级）
  */
 
 import type { AgentTeamMember, DispatchPolicy, MemberRole } from "./types.js";
@@ -66,8 +67,18 @@ export function selectMember(
       return matched[0] ?? null;
     }
 
+    case "llm-supervisor": {
+      // LLM-supervisor 策略在 team.ts 中处理，此处降级为 primary 角色优先
+      const primary = members.find((m) => m.role === "primary");
+      if (primary) return primary;
+      // 降级：第一个成员
+      return members[0] ?? null;
+    }
+
     default: {
       // 穷尽性检查
+      const _exhaustive: never = policy;
+      void _exhaustive;
       return null;
     }
   }

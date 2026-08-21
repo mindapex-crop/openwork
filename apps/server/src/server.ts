@@ -94,7 +94,10 @@ import { registerAgentRuntimeRoutes } from "./routes/agent-runtimes.js";
 import { registerWorktreeRoutes } from "./routes/worktrees.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerTrajectoryRoutes } from "./routes/trajectories.js";
+import { registerTeamRoutes } from "./routes/teams.js";
+import { registerAgentRoutes } from "./routes/agents.js";
 import { RuntimeRegistry } from "./runtime-registry.js";
+import { getGlobalAgentScanner } from "./agent-scanner.js";
 import { isCliAgentId, runCliAgentPrompt } from "./cli-agent-session.js";
 import { WorktreeService } from "./worktree/worktree-service.js";
 import { ChatRelayService } from "./chat/chat-relay.js";
@@ -906,6 +909,8 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   const env = new EnvService();
   const logger = createServerLogger(config);
   const runtimeRegistry = new RuntimeRegistry();
+  const agentScanner = getGlobalAgentScanner(runtimeRegistry);
+  agentScanner.start();
   try {
     await reconcileLocalManagedMcpRuntimeEntries(config);
   } catch (error) {
@@ -1173,6 +1178,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   return {
     ...server,
     stop: async () => {
+      agentScanner.stop();
       cloudProviderSync.stop();
       invalidateEngineMcpServerState(config, engineMcpServerState);
       watcherHandle.close();
@@ -1479,6 +1485,8 @@ async function enrichOpencodeAgentList(input: {
         installHint: cap.installHint,
         // CLI 内置默认模型：UI 选中该 agent 时模型选择器应对齐到此模型
         ...(cap.defaultModel ? { model: cap.defaultModel } : {}),
+        // 运行时发现的模型列表（懒加载，首次可能为空，后续 discoverAgentModels 填充）
+        ...(cap.models && cap.models.length > 0 ? { models: cap.models } : {}),
       }));
 
     const annotatedUpstream = upstream.map((agent: Record<string, unknown>) => {
@@ -1491,6 +1499,9 @@ async function enrichOpencodeAgentList(input: {
         available: known.available,
         ...(known.binaryPath ? { binaryPath: known.binaryPath } : {}),
         ...(known.installHint ? { installHint: known.installHint } : {}),
+        // 上游列表里已有的 CLI agent 同样标记 source，前端据此把模型选择器
+        // 对齐到该 CLI agent 的支持模型（agentId 传递、置顶组、可选模型确认）
+        source: "openwork",
       };
     });
 
@@ -2159,6 +2170,9 @@ function createRoutes(
     readJsonBody,
     resolveWorkspace,
   });
+
+  registerTeamRoutes({ routes, jsonResponse, readJsonBody });
+  registerAgentRoutes({ routes, jsonResponse, readJsonBody });
 
   registerSessionRoutes({
     routes,

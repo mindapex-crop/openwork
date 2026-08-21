@@ -32,6 +32,13 @@ import type {
 
 export type CliAutomationMode = "headless" | "pty" | "structured" | "unsupported";
 
+export interface CliModelInfo {
+  providerID: string;
+  modelID: string;
+  name?: string;
+  isDefault?: boolean;
+}
+
 export interface CliCapabilities {
   mode: CliAutomationMode;
   /** 探测到的二进制绝对路径 */
@@ -46,6 +53,10 @@ export interface CliCapabilities {
   permissions?: boolean;
   /** 不支持原因（mode === "unsupported" 时必有） */
   unsupportedReason?: string;
+  /** 运行时发现的模型列表 */
+  models?: CliModelInfo[];
+  /** 模型发现耗时 ms */
+  modelDiscoveryMs?: number;
 }
 
 export interface DetectCliCapabilitiesOptions {

@@ -22,7 +22,7 @@
 
 import { randomUUID } from "node:crypto";
 import { runAgentPrompt } from "./agent-team/agent-runner.js";
-import { createAdapterForAgent, type CreateAdapterForAgentOptions } from "./agent-sidecar/registry.js";
+import { createAdapterForAgent, type CreateAdapterForAgentOptions } from "./agent-sidecar/index.js";
 import { AGENT_PRESETS, selectPresetForAgent, DEFAULT_PROTOCOL_PREFERENCE } from "./agent-sidecar/presets.js";
 import { GenericCliSidecarAdapter } from "./agent-sidecar/cli-adapter/generic-cli.js";
 import { restoreRealHomeEnv } from "./agent-sidecar/home-env.js";

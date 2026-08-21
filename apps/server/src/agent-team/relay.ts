@@ -1,5 +1,5 @@
 /**
- * Relay Pipeline 实现
+ * Relay Pipeline 实现（v2 增强版）
  *
  * 三种编排策略（参考 multica 的 task assignment + paperclip 的 orchestrator）：
  *
@@ -15,6 +15,8 @@
  *    - 由调用方提供 assignment 映射：agentId → prompt
  *    - 借鉴 multica 的 task assignment：A 写代码、B 写测试、C 写文档
  *
+ * v2 增强：每个 agent 使用独立 worktree cwd，防止文件冲突。
+ *
  * 通过 runAgentPrompt 统一屏蔽 PTY/ACP/Generic 协议差异，
  * 不直接调 LLM，只通过 AgentSidecarAdapter 接入。
  */
@@ -29,6 +31,15 @@ import type {
   TeamEvent,
 } from "./types.js";
 import { runAgentPrompt } from "./agent-runner.js";
+
+/** 获取 agent 的 cwd（支持 worktree 隔离） */
+function getAgentCwd(team: AgentTeamHandle, agentId: string, baseCwd: string): string {
+  const impl = team as unknown as { getAgentCwd?: (agentId: string, baseCwd: string) => string; config?: { worktreeIsolation?: boolean } };
+  if (impl.config?.worktreeIsolation && typeof impl.getAgentCwd === "function") {
+    return impl.getAgentCwd(agentId, baseCwd);
+  }
+  return baseCwd;
+}
 
 /** 提取 agent 最终输出文本（agent-message-chunk 累计） */
 function extractFinalText(events: AgentEvent[]): string {
@@ -92,9 +103,10 @@ export async function* relayChain(
     let stageOutput = "";
     let stageFailed = false;
     const stageEvents: AgentEvent[] = [];
+    const agentCwd = getAgentCwd(team, agentId, input.cwd);
     for await (const event of runAgentPrompt({
       adapter: member.adapter,
-      cwd: input.cwd,
+      cwd: agentCwd,
       prompt: currentPrompt,
       timeoutMs: stageTimeout,
     })) {
@@ -163,7 +175,7 @@ export async function* broadcastToAll(
   // 并发执行
   yield* raceAll(
     members.map((m) =>
-      runSingleAgent(m.agentId, m.adapter, task.taskId, task.prompt, task.cwd, timeoutMs),
+      runSingleAgent(team, m.agentId, m.adapter, task.taskId, task.prompt, task.cwd, timeoutMs),
     ),
   );
 }
@@ -250,10 +262,11 @@ async function* runFanOutAssignment(
 
   const timeoutMs = assignment.timeoutMs ?? defaultTimeoutMs;
   const events: AgentEvent[] = [];
+  const agentCwd = getAgentCwd(team, assignment.agentId, cwd);
 
   for await (const event of runAgentPrompt({
     adapter: member.adapter,
-    cwd,
+    cwd: agentCwd,
     prompt: assignment.prompt,
     timeoutMs,
   })) {
@@ -297,8 +310,9 @@ async function* runFanOutAssignment(
   };
 }
 
-/** 单 agent 执行 helper（broadcast 用） */
+/** 单 agent 执行 helper（broadcast 用，支持 worktree 隔离） */
 async function* runSingleAgent(
+  team: AgentTeamHandle,
   agentId: string,
   adapter: import("../agent-sidecar/types.js").AgentSidecarAdapter,
   taskId: string,
@@ -309,8 +323,9 @@ async function* runSingleAgent(
   yield { kind: "task-assigned", taskId, agentId };
 
   const events: AgentEvent[] = [];
+  const agentCwd = getAgentCwd(team, agentId, cwd);
 
-  for await (const event of runAgentPrompt({ adapter, cwd, prompt, timeoutMs })) {
+  for await (const event of runAgentPrompt({ adapter, cwd: agentCwd, prompt, timeoutMs })) {
     events.push(event);
     yield { kind: "task-event", taskId, agentId, event };
     if (event.kind === "stop") break;

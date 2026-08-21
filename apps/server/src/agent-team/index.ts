@@ -70,6 +70,20 @@ export type {
   RelayStrategy,
   TeamEvent,
   TeamTask,
+  // 新增类型
+  AgentMessage,
+  AgentMessageType,
+  WorktreeInfo,
+  WorktreeConfig,
+  MergeStrategy,
+  MergeOptions,
+  MergeResult,
+  WorktreeDiff,
+  SupervisorConfig,
+  SupervisorDecision,
+  SubTaskAssignment,
+  ModelCostConfig,
+  RoleModelRecommendation,
 } from "./types.js";
 
 export {
@@ -89,3 +103,9 @@ export {
 
 export { relayChain, broadcastToAll, fanOut } from "./relay.js";
 export { runAgentPrompt, type RunAgentPromptParams } from "./agent-runner.js";
+
+// 新增模块导出
+export { WorktreeManager } from "./worktree-manager.js";
+export { TeamMessageBus } from "./message-bus.js";
+export { Supervisor, FunctionalSupervisor } from "./supervisor.js";
+export { CostEfficiencyRouter } from "./cost-efficiency-router.js";

@@ -16,7 +16,9 @@
 import { detectAllAgents, detectAgent } from "./agent-sidecar/detect.js";
 import { AGENT_PRESETS } from "./agent-sidecar/presets.js";
 import { GenericCliSidecarAdapter, type CliCapabilities } from "./agent-sidecar/cli-adapter/generic-cli.js";
-import { createAdapterForAgent } from "./agent-sidecar/registry.js";
+import { createAdapterForAgent } from "./agent-sidecar/index.js";
+import { discoverModelsForAgent } from "./agent-sidecar/model-discovery.js";
+import type { CliModelInfo } from "./agent-sidecar/cli-adapter/generic-cli.js";
 import type { AgentDetectResult } from "./agent-sidecar/types.js";
 
 /** 默认缓存 TTL（毫秒） */
@@ -65,6 +67,10 @@ export interface RuntimeAgentCapability {
   executionMode?: "headless-oneshot" | "persistent-pty";
   /** CLI 内置默认模型（选中该 CLI agent 时 UI 模型选择器应对齐到此模型） */
   defaultModel?: { providerID: string; modelID: string };
+  /** 运行时发现的模型列表 */
+  models?: CliModelInfo[];
+  /** 最后刷新时间戳（供 UI 判断新鲜度） */
+  lastRefreshedAt?: number;
 }
 
 export interface RuntimeRegistryOptions {
@@ -86,12 +92,34 @@ export class RuntimeRegistry {
   private cache: RuntimeAgentCapability[] | null = null;
   private cachedAt = 0;
   private probing: Promise<RuntimeAgentCapability[]> | null = null;
+  private backgroundTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: RuntimeRegistryOptions = {}) {
     this.ttlMs = options.ttlMs ?? RUNTIME_REFRESH_TTL_MS;
     this.deepProbe = options.deepProbe ?? true;
     this.path = options.path;
     this.detectFn = options.detect ?? detectAllAgents;
+  }
+
+  /** 启动后台定时刷新（默认 5 分钟间隔，非阻塞） */
+  startBackgroundRefresh(intervalMs: number = 5 * 60_000): void {
+    if (this.backgroundTimer) return;
+    this.backgroundTimer = setInterval(() => {
+      this.refresh().catch(() => {
+        // 后台刷新失败静默（前台调用仍可获取旧缓存）
+      });
+    }, intervalMs);
+    if (typeof this.backgroundTimer.unref === "function") {
+      this.backgroundTimer.unref();
+    }
+  }
+
+  /** 停止后台刷新 */
+  stopBackgroundRefresh(): void {
+    if (this.backgroundTimer) {
+      clearInterval(this.backgroundTimer);
+      this.backgroundTimer = null;
+    }
   }
 
   /** 强制重扫（I3: 逐条容错，单 agent 失败不影响整体） */
@@ -120,6 +148,7 @@ export class RuntimeRegistry {
         preferProtocolOrder: preset?.preferProtocolOrder,
         executionMode: preset?.executionMode,
         defaultModel: preset?.defaultModel,
+        lastRefreshedAt: Date.now(),
       };
 
       if (result.available && preset && this.deepProbe) {
@@ -182,6 +211,7 @@ export class RuntimeRegistry {
       preferProtocolOrder: preset.preferProtocolOrder,
       executionMode: preset.executionMode,
       defaultModel: preset.defaultModel,
+      lastRefreshedAt: Date.now(),
     };
     if (result.available) {
       try {
@@ -191,6 +221,47 @@ export class RuntimeRegistry {
       }
     }
     return base;
+  }
+
+  /**
+   * 懒发现指定 agent 的模型（首次调用时 spawn CLI 命令，后续缓存命中）
+   * 设计原则：不阻塞 refresh() 主流程，按需发现
+   */
+  async discoverAgentModels(agentId: string, forceRefresh = false): Promise<CliModelInfo[]> {
+    // Check cache first
+    if (!forceRefresh) {
+      const cached = this.cache?.find((c) => c.agentId === agentId);
+      if (cached?.models && cached.models.length > 0) {
+        return cached.models;
+      }
+    }
+
+    const preset = AGENT_PRESETS[agentId];
+    if (!preset) return [];
+
+    // Get binary path from cache or detect
+    let binaryPath: string | undefined;
+    const cached = this.cache?.find((c) => c.agentId === agentId);
+    if (cached?.binaryPath) {
+      binaryPath = cached.binaryPath;
+    } else {
+      const result = await detectAgent(preset, this.path);
+      binaryPath = result.binaryPath;
+    }
+
+    if (!binaryPath) return preset.defaultModel ? [preset.defaultModel] : [];
+
+    const { models } = await discoverModelsForAgent(preset, binaryPath, { forceRefresh });
+
+    // Update cache
+    if (this.cache) {
+      const idx = this.cache.findIndex((c) => c.agentId === agentId);
+      if (idx >= 0) {
+        this.cache[idx] = { ...this.cache[idx], models };
+      }
+    }
+
+    return models;
   }
 
   /** 强制失效缓存（供 POST /agent-runtimes/reload 使用） */
@@ -212,7 +283,8 @@ export class RuntimeRegistry {
         cliProfile: preset.cliProfile,
         env: preset.env,
       });
-      return adapter.detectCapabilities();
+      const caps = await adapter.detectCapabilities();
+      return caps;
     }
     // acp/mcp：能力声明即视为支持（协议层握手在 start 时验证）
     return {
