@@ -36,8 +36,10 @@ function isExpectedConnectionAbort(error: unknown): boolean {
   const causeCode = (error as { cause?: { code?: string } }).cause?.code;
   return (
     code === "ECONNRESET" ||
+    code === "EPIPE" ||
     code === "UND_ERR_SOCKET" ||
     causeCode === "UND_ERR_SOCKET" ||
+    causeCode === "EPIPE" ||
     error.name === "AbortError" ||
     error.message === "terminated"
   );
@@ -171,8 +173,21 @@ export function serve(options: ServeOptions): Promise<ServeResult> {
 
   const server = createServer(async (nodeReq, nodeRes) => {
     nodeRes.on("error", (error) => {
+      const code = (error as NodeJS.ErrnoException).code;
       if (isWriteAfterEndError(error)) {
         console.warn("[serve-node] Ignored response write after end");
+        return;
+      }
+      // Response-side pipe/socket failures happen when the client hangs up
+      // mid-stream (e.g. Electron renderer navigates away, network drops).
+      // These are normal lifecycle events, not server bugs.
+      if (
+        code === "EPIPE" ||
+        code === "ECONNRESET" ||
+        code === "EIO" ||
+        code === "ERR_STREAM_DESTROYED" ||
+        isExpectedConnectionAbort(error)
+      ) {
         return;
       }
       console.error("[serve-node] Response stream error:", error);

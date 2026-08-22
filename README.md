@@ -65,6 +65,92 @@ Use this remote MCP server URL:
 https://api.openworklabs.com/mcp/agent
 ```
 
+## Agent Team — Multi-Agent Orchestration
+
+OpenWork includes a powerful multi-agent orchestration system that lets you coordinate multiple CLI agents (Claude Code, Codex, etc.) to work together on complex tasks. It is designed for teams that need to run multiple coding agents in parallel while preventing conflicts and ensuring efficient resource usage.
+
+### Four Orchestration Modes
+
+- **Dispatch** — Route a single task to the best agent based on policy (round-robin, capability-match, primary-with-fallback, LLM-supervisor)
+- **Relay** — Serial pipeline: Agent A's output becomes Agent B's input (chain strategy)
+- **Broadcast** — Send the same task to all agents in parallel, collect all results
+- **Fan-out** — Each agent handles a different subtask assignment, running in parallel
+
+### Key Capabilities
+
+- **Worktree Isolation** — Each agent gets an independent Git worktree, preventing file conflicts when multiple agents modify the same repository simultaneously. Built-in merge support with three strategies (auto-merge, cherry-pick, sequential) and conflict detection.
+- **LLM Supervisor** — An LLM-driven task router that dynamically decomposes complex tasks into subtasks and selects the best agent for each based on capabilities and context.
+- **Agent Message Bus** — Direct inter-agent communication with direct, broadcast, and system message types. Enables collaboration patterns like "reviewer approves coder's changes".
+- **Cost-Efficiency Model Routing** — Automatically recommends optimal models for each agent role (primary, specialist, reviewer, fallback) based on cost and capability analysis.
+- **Process Pool Management** — Built-in `SidecarProcessPool` manages agent process reuse, concurrency control, and automatic cleanup to prevent resource leaks.
+- **Plan-Act Pattern** — Paired execution where a "plan" phase (strong reasoner) produces a step-by-step plan, then an "act" phase (fast executor) carries it out.
+- **Cloud Context** — Session snapshot store for cross-machine relay, allowing relay pipelines to resume on different machines via JSONL transcripts.
+
+### Quick Example
+
+```typescript
+import { createAdapterForAgent } from "./agent-sidecar/index.js";
+import { createAgentTeam, dispatchTask, relayPipeline, broadcastTask, fanOutTask } from "./agent-team/index.js";
+
+// Create a team with worktree isolation
+const team = await createAgentTeam({
+  teamId: "feature-team",
+  members: [
+    { agentId: "claude-code", adapter: createAdapterForAgent("claude-code"), role: "primary" },
+    { agentId: "codex", adapter: createAdapterForAgent("codex"), role: "reviewer" },
+  ],
+  dispatchPolicy: { kind: "llm-supervisor", model: "gpt-4" },
+  worktreeIsolation: true,
+  useProcessPool: true,
+}, { cwd: "/path/to/project" });
+
+// Fan-out: parallel subtasks
+for await (const ev of fanOutTask(team, {
+  fanOutId: "feat-1",
+  assignments: [
+    { agentId: "claude-code", prompt: "Implement feature A" },
+    { agentId: "codex", prompt: "Write tests for feature A" },
+  ],
+})) {
+  console.log(ev);
+}
+
+// Merge all worktree changes back
+const result = team.mergeWorktrees({
+  strategy: "auto-merge",
+  cleanupAfterMerge: true,
+});
+
+await team.stop();
+```
+
+### Dispatch Policies
+
+| Policy | Description |
+|--------|-------------|
+| `round-robin` | Rotates through members sequentially |
+| `first-available` | Picks the first alive agent |
+| `capability-match` | Selects agent matching required capabilities |
+| `primary-with-fallback` | Uses primary agent, falls back on failure |
+| `role-based` | Routes by member role (primary, reviewer, specialist) |
+| `llm-supervisor` | LLM-driven intelligent routing |
+
+### Agent Roles
+
+- `primary` — Default agent that handles most tasks
+- `reviewer` — Review, proofread, and quality check
+- `specialist` — Domain expert for capability-matched tasks
+- `fallback` — Standby agent when primary fails
+- `observer` — Read-only participant in broadcast mode
+
+### Worktree Merge Strategies
+
+| Strategy | Description | Best For |
+|----------|-------------|----------|
+| `auto-merge` | Direct `git merge --no-ff` | Agents modify different files |
+| `cherry-pick` | Individual commit cherry-pick | Preserving commit history |
+| `sequential` | Squash commit then merge | Multiple agents modifying same files |
+
 ## OpenWork Den
 
 OpenWork Den is the control plane for managing OpenWork across a team or organization.

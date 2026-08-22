@@ -2,6 +2,104 @@
 
 Filesystem-backed API for OpenWork remote clients. This package provides the OpenWork server layer described in `apps/app/pr/openwork-server.md` and is intentionally independent from the desktop app.
 
+## Agent Team — Multi-Agent Orchestration
+
+The server includes a powerful multi-agent orchestration module (`src/agent-team/`) that coordinates multiple CLI agents to work together on complex tasks.
+
+### Core Concepts
+
+- **AgentTeam** — A team of CLI agents working together with shared configuration and lifecycle management
+- **Four Orchestration Modes**: Dispatch, Relay (chain), Broadcast, Fan-out
+- **Worktree Isolation** — Each agent gets an independent Git worktree to prevent file conflicts
+- **LLM Supervisor** — LLM-driven task decomposition and agent selection
+- **Message Bus** — Direct inter-agent communication (direct, broadcast, system messages)
+- **Cost-Efficiency Router** — Model recommendation by role based on cost/benefit analysis
+- **Process Pool** — Agent process reuse and concurrency control via `SidecarProcessPool`
+- **Plan-Act Pattern** — Paired plan/act execution with separate model selection
+- **Cloud Context** — Session snapshot store for cross-machine relay resume
+
+### Usage Example
+
+```typescript
+import { createAgentTeam, fanOutTask } from "./agent-team/index.js";
+import { createAdapterForAgent } from "./agent-sidecar/index.js";
+
+const team = await createAgentTeam({
+  teamId: "feature-team",
+  members: [
+    { agentId: "claude-code", adapter: createAdapterForAgent("claude-code"), role: "primary" },
+    { agentId: "codex", adapter: createAdapterForAgent("codex"), role: "reviewer" },
+  ],
+  dispatchPolicy: { kind: "llm-supervisor", model: "gpt-4" },
+  worktreeIsolation: true,
+  useProcessPool: true,
+}, { cwd: "/path/to/project" });
+
+// Fan-out parallel subtasks
+for await (const ev of fanOutTask(team, {
+  fanOutId: "feat-1",
+  assignments: [
+    { agentId: "claude-code", prompt: "Implement feature A" },
+    { agentId: "codex", prompt: "Write tests for feature A" },
+  ],
+})) {
+  console.log(ev);
+}
+
+// Merge worktree changes back
+const result = team.mergeWorktrees({ strategy: "auto-merge", cleanupAfterMerge: true });
+await team.stop();
+```
+
+### Dispatch Policies
+
+| Policy | Description |
+|--------|-------------|
+| `round-robin` | Rotate through members sequentially |
+| `first-available` | Pick first alive agent |
+| `capability-match` | Match agent by required capabilities |
+| `primary-with-fallback` | Primary agent with fallback chain |
+| `role-based` | Route by member role |
+| `llm-supervisor` | LLM-driven intelligent routing |
+
+### Agent Roles
+
+- `primary` — Default agent for most tasks
+- `reviewer` — Review and quality check
+- `specialist` — Domain expert for capability-matched tasks
+- `fallback` — Standby agent
+- `observer` — Read-only in broadcast mode
+
+### Worktree Merge Strategies
+
+| Strategy | Description |
+|----------|-------------|
+| `auto-merge` | Direct `git merge --no-ff` |
+| `cherry-pick` | Individual commit cherry-pick |
+| `sequential` | Squash commit then merge |
+
+### Module Structure
+
+```
+src/agent-team/
+├── index.ts              # Public API exports
+├── types.ts              # Type definitions
+├── team.ts               # AgentTeam lifecycle management
+├── dispatch.ts           # Dispatch policy implementations
+├── relay.ts              # Relay/broadcast/fan-out orchestration
+├── agent-runner.ts       # Single agent prompt runner
+├── worktree-manager.ts   # Git worktree isolation + merge
+├── message-bus.ts        # Inter-agent communication
+├── supervisor.ts         # LLM-driven task router
+├── cost-efficiency-router.ts  # Model selection by role/cost
+├── plan-act.ts           # Plan-Act paired execution
+├── cloud-context.ts     # Cross-machine session snapshot store
+├── ssh-relay.ts          # SSH tunnel for remote relay
+├── team-strategies.ts    # Team strategy definitions
+├── harness-environment.ts # Test harness environment
+└── *.test.ts             # Test files
+```
+
 ## Quick start
 
 ```bash

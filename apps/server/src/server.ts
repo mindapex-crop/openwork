@@ -767,6 +767,38 @@ function toUnixNano(): string {
   return (BigInt(Date.now()) * 1_000_000n).toString();
 }
 
+function isStdoutWritable(): boolean {
+  const stream = process.stdout;
+  if (!stream) return false;
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Node can exit mid-write; guards avoid crashing.
+  if (stream.destroyed || stream.closed) return false;
+  if (typeof stream.writableEnded === "boolean" && stream.writableEnded) return false;
+  return true;
+}
+
+function safeStdoutWrite(chunk: string): void {
+  if (!isStdoutWritable()) return;
+  try {
+    process.stdout.write(chunk);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // EPIPE / ECONNRESET / EIO on stdout/stderr sinks come from detached
+    // Electron parents, dead TTYs, or CI runner pipe teardown. Dropping a
+    // log line is strictly better than terminating the whole server with
+    // an uncaught exception.
+    if (
+      code === "EPIPE" ||
+      code === "ECONNRESET" ||
+      code === "EIO" ||
+      code === "ERR_STREAM_DESTROYED" ||
+      code === "ERR_STREAM_WRITE_AFTER_END"
+    ) {
+      return;
+    }
+    throw error;
+  }
+}
+
 export function createServerLogger(config: ServerConfig): ServerLogger {
   const runId = process.env.OPENWORK_RUN_ID ?? shortId();
   const host = hostname().trim();
@@ -794,10 +826,10 @@ export function createServerLogger(config: ServerConfig): ServerLogger {
         attributes: merged,
         resource,
       };
-      process.stdout.write(`${JSON.stringify(record)}\n`);
+      safeStdoutWrite(`${JSON.stringify(record)}\n`);
       return;
     }
-    process.stdout.write(`${message}\n`);
+    safeStdoutWrite(`${message}\n`);
   };
 
   return { log: emit };
@@ -902,7 +934,41 @@ function isPromptAsyncProxyRequest(method: string, proxyPath: string) {
   return method === "POST" && /^\/session\/[^/]+\/prompt_async$/.test(normalizeOpencodeProxyPath(proxyPath));
 }
 
+function installStdioErrorHandlers(): void {
+  // Swallow EPIPE / closed-pipe errors on stdout and stderr. These surfaces
+  // are owned by the process launcher (Electron main, pnpm, CI runner, TTY).
+  // When Electron detaches dev processes or a parent shell closes, the
+  // logging pipeline still tries to emit and crashes the server via
+  // uncaughtException. Silently dropping log writes is strictly preferred
+  // over taking down the whole workspace.
+  const handle = (stream: NodeJS.WriteStream) => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- older Nodes may not expose `on` for all streams.
+    if (!stream?.on) return;
+    stream.on("error", (error: unknown) => {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        code === "EPIPE" ||
+        code === "ECONNRESET" ||
+        code === "EIO" ||
+        code === "ERR_STREAM_DESTROYED" ||
+        code === "ERR_STREAM_WRITE_AFTER_END"
+      ) {
+        return;
+      }
+      // Fall back to stderr directly via a bare write to avoid recursion.
+      try {
+        process.stderr.write(`[openwork-server] stdio error: ${String(error)}\n`);
+      } catch {
+        // nothing left to do
+      }
+    });
+  };
+  handle(process.stdout);
+  handle(process.stderr);
+}
+
 export async function startServer(config: ServerConfig): Promise<ServeResult> {
+  installStdioErrorHandlers();
   const approvals = new ApprovalService(config.approval);
   const reloadEvents = new ReloadEventStore();
   const tokens = new TokenService(config);

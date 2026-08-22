@@ -67,7 +67,92 @@ OpenWork 的设计目标是：
 - **技能管理器**：
   - 列出已安装的 `.opencode/skills` 文件夹
   - 将本地技能文件夹导入到 `.opencode/skills/<skill-name>`
- 
+
+## Agent Team — 多 Agent 编排系统
+
+OpenWork 内置了强大的多 Agent 编排系统，支持同时协调多个 CLI Agent（Claude Code、Codex 等）协作完成复杂任务。为需要并行运行多个编码 Agent、防止冲突、保障系统稳定的团队而设计。
+
+### 四种编排模式
+
+- **Dispatch（分派）** — 根据策略将单个任务路由到最合适的 Agent（轮询、能力匹配、主备切换、LLM 监督）
+- **Relay（接力）** — 串行流水线：Agent A 的输出作为 Agent B 的输入（链式策略）
+- **Broadcast（广播）** — 同一任务并行发送给所有 Agent，收集全部结果
+- **Fan-out（分发）** — 每个 Agent 处理不同的子任务，并行执行
+
+### 核心能力
+
+- **Worktree 隔离** — 每个 Agent 获取独立的 Git worktree，多 Agent 并行修改同一仓库时防止文件冲突。内置合并支持，提供三种策略（自动合并、cherry-pick、顺序合并）及冲突检测。
+- **LLM Supervisor** — 由 LLM 驱动的任务路由器，动态将复杂任务分解为子任务，并根据能力和上下文为每个子任务选择最优 Agent。
+- **Agent 消息总线** — Agent 间直接通信，支持点对点、广播和系统消息。实现「审查者批准编码者变更」等协作模式。
+- **成本-效率模型路由** — 根据成本和能力分析，为每个 Agent 角色（主力、专家、审查、备用）自动推荐最优模型。
+- **进程池管理** — 内置 `SidecarProcessPool` 管理 Agent 进程复用、并发控制和自动清理，防止资源泄漏。
+- **Plan-Act 模式** — 配对执行：Plan 阶段（强推理模型）产出分步计划，Act 阶段（快速执行模型）按计划执行。
+- **云端上下文** — 会话快照存储，支持跨机器接力，通过 JSONL 转录在不同机器上恢复接力流水线。
+
+### 快速示例
+
+```typescript
+import { createAdapterForAgent } from "./agent-sidecar/index.js";
+import { createAgentTeam, dispatchTask, relayPipeline, broadcastTask, fanOutTask } from "./agent-team/index.js";
+
+// 创建启用 worktree 隔离的团队
+const team = await createAgentTeam({
+  teamId: "feature-team",
+  members: [
+    { agentId: "claude-code", adapter: createAdapterForAgent("claude-code"), role: "primary" },
+    { agentId: "codex", adapter: createAdapterForAgent("codex"), role: "reviewer" },
+  ],
+  dispatchPolicy: { kind: "llm-supervisor", model: "gpt-4" },
+  worktreeIsolation: true,
+  useProcessPool: true,
+}, { cwd: "/path/to/project" });
+
+// Fan-out：并行子任务
+for await (const ev of fanOutTask(team, {
+  fanOutId: "feat-1",
+  assignments: [
+    { agentId: "claude-code", prompt: "实现功能 A" },
+    { agentId: "codex", prompt: "为功能 A 编写测试" },
+  ],
+})) {
+  console.log(ev);
+}
+
+// 合并所有 worktree 变更
+const result = team.mergeWorktrees({
+  strategy: "auto-merge",
+  cleanupAfterMerge: true,
+});
+
+await team.stop();
+```
+
+### 分派策略
+
+| 策略 | 说明 |
+|------|------|
+| `round-robin` | 轮询，依次分派给各成员 |
+| `first-available` | 选择第一个存活的 Agent |
+| `capability-match` | 根据所需能力匹配 Agent |
+| `primary-with-fallback` | 使用主力 Agent，失败时切换备用 |
+| `role-based` | 按角色路由（主力、审查、专家） |
+| `llm-supervisor` | LLM 驱动的智能路由 |
+
+### Agent 角色
+
+- `primary` — 主力 Agent，承担大部分任务
+- `reviewer` — 审查、校对、质量检查
+- `specialist` — 领域专家，用于能力匹配
+- `fallback` — 备用 Agent，主力失败时启用
+- `observer` — 只读参与者，仅广播模式下参与
+
+### Worktree 合并策略
+
+| 策略 | 说明 | 适用场景 |
+|------|------|----------|
+| `auto-merge` | 直接 `git merge --no-ff` | 各 Agent 修改不同文件 |
+| `cherry-pick` | 逐个 commit 挑选 | 保留每个 commit 历史 |
+| `sequential` | Squash commit 后合并 | 多个 Agent 修改同一文件 |
 
 ## 技能管理器    
 <img width="1292" height="932" alt="image" src="https://github.com/user-attachments/assets/b500c1c6-a218-42ce-8a11-52787f5642b6" />

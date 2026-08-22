@@ -8,6 +8,7 @@
  * DELETE /teams/:id                        → 删除 team
  * POST   /teams/:id/members                → 添加成员
  * DELETE /teams/:id/members/:agentId       → 移除成员
+ * POST   /teams/run-simple                 → 一键协作（自动探测 agent + 建团队 + 执行）
  * POST   /teams/:id/run                    → 运行 team 任务（分解 + 执行）
  * POST   /teams/:id/decompose              → 仅分解任务（不执行）
  * GET    /teams/:id/tasks                  → 列出 team 任务历史
@@ -18,6 +19,15 @@
  */
 
 import { addRoute, type Route } from "./registry.js";
+import { detectAllAgents } from "../agent-sidecar/detect.js";
+import type { AgentDetectResult } from "../agent-sidecar/types.js";
+import { createAdapterForAgent } from "../agent-sidecar/index.js";
+import {
+  createAgentTeam,
+  fanOutTask,
+  type AgentTeamConfig,
+  type MemberRole,
+} from "../agent-team/index.js";
 import { getGlobalHarnessManager, type HarnessDefinition } from "../agent-team/harness-environment.js";
 import {
   getStrategyConfig,
@@ -32,7 +42,39 @@ export interface RegisterTeamRoutesOptions {
   jsonResponse: (data: unknown, status?: number) => Response;
   readJsonBody: (request: Request) => Promise<unknown>;
   createTeamClient?: () => unknown;
+  /** 本机可用 agent 探测（默认 detectAllAgents，测试可注入 mock） */
+  detectAgents?: () => Promise<AgentDetectResult[]>;
+  /** 一键协作执行依赖（默认真实并行执行，测试可注入假实现，避免真实 spawn agent） */
+  executePlan?: RunSimpleExecutor;
 }
+
+/** run-simple 单个子任务的执行结果（面向普通用户的简化结构） */
+export interface CollabSubtaskResult {
+  subtaskId: string;
+  agentId: string;
+  prompt: string;
+  status: "completed" | "failed";
+  outputTail?: string;
+}
+
+/** run-simple 执行计划的输入 */
+export interface RunSimpleExecutionInput {
+  teamId: string;
+  taskId: string;
+  prompt: string;
+  subtasks: Array<{ subtaskId: string; agentId: string; prompt: string; dependencies: string[] }>;
+  memberSpecs: Array<{ agentId: string; role?: MemberRole }>;
+}
+
+/** run-simple 执行计划的输出 */
+export interface RunSimpleExecutionResult {
+  status: "completed" | "failed" | "partial";
+  subtaskResults: CollabSubtaskResult[];
+  message: string;
+}
+
+/** 一键协作执行函数签名（可注入，便于测试不真实 spawn agent） */
+export type RunSimpleExecutor = (plan: RunSimpleExecutionInput) => Promise<RunSimpleExecutionResult>;
 
 /** 内存中的 team 存储（简化实现，后续可对接数据库） */
 interface StoredTeam {
@@ -63,7 +105,7 @@ function errorMessage(error: unknown): string {
 }
 
 export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
-  const { routes, jsonResponse, readJsonBody } = options;
+  const { routes, jsonResponse, readJsonBody, detectAgents, executePlan } = options;
 
   // ============ Team CRUD ============
 
@@ -231,6 +273,93 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
     team.updatedAt = Date.now();
 
     return jsonResponse({ team: serializeTeam(team) });
+  });
+
+  // ============ 一键协作（简化用户入口，隐藏 CLI/agent/harness 概念）============
+
+  addRoute(routes, "POST", "/teams/run-simple", "none", async (ctx) => {
+    const body = await readJsonBody(ctx.request);
+    if (!body || typeof body !== "object") {
+      return jsonResponse({ error: "invalid body" }, 400);
+    }
+
+    const { prompt } = body as { prompt?: string };
+    if (!prompt || !prompt.trim()) {
+      return jsonResponse({ error: "prompt is required" }, 400);
+    }
+
+    // 探测本机已装且可用的 agent（默认 detectAllAgents，测试可注入 mock）
+    const detect = detectAgents ?? detectAllAgents;
+    const available = (await detect()).filter((r) => r.available);
+
+    if (available.length === 0) {
+      return jsonResponse(
+        {
+          error: "no_agent_available",
+          hint:
+            "未检测到可用的 agent。请先安装任意支持的 CLI agent（如 opencode、kimi、claude-code、codex）后再试。",
+        },
+        400,
+      );
+    }
+
+    // 自动分配角色：主力 + 若干 specialist/reviewer
+    const memberSpecs: Array<{ agentId: string; role: "primary" | "specialist" | "reviewer" }> =
+      available.map((a, i) => ({
+        agentId: a.agentId,
+        role: i === 0 ? "primary" : i === 1 ? "specialist" : i === 2 ? "reviewer" : "specialist",
+      }));
+
+    const teamId = generateTeamId();
+    const strategyId: TeamStrategyId = "balanced";
+    const team: StoredTeam = {
+      id: teamId,
+      name: "任务 自动团队",
+      strategy: strategyId,
+      memberSpecs,
+      harnessId: "local-default",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      status: "idle",
+    };
+    teamStore.set(teamId, team);
+
+    // 复用 /teams/:id/run 的分解逻辑，然后真实并行执行（复用 agent-team 内核）
+    const taskPrompt = prompt.trim();
+    const subtasks = generateDecomposition(taskPrompt, memberSpecs, strategyId);
+    const taskId = `task_${Date.now().toString(36)}`;
+
+    const runner = executePlan ?? executeCollabPlan;
+    const result = await runner({
+      teamId,
+      taskId,
+      prompt: taskPrompt,
+      subtasks,
+      memberSpecs,
+    });
+
+    // 任一子任务失败不应使整体 500：失败情况已折叠进 subtaskResults + status
+    team.lastTaskResult = {
+      taskId,
+      subtasks: result.subtaskResults.map((s) => ({
+        subtaskId: s.subtaskId,
+        agentId: s.agentId,
+        prompt: s.prompt,
+        status: s.status,
+      })),
+      completedAt: Date.now(),
+    };
+    team.status = result.status === "failed" ? "failed" : "completed";
+    team.updatedAt = Date.now();
+
+    return jsonResponse({
+      teamId,
+      taskId,
+      strategy: strategyId,
+      status: result.status,
+      subtaskResults: result.subtaskResults,
+      message: result.message,
+    });
   });
 
   // ============ Team Task Execution ============
@@ -599,4 +728,106 @@ function estimateCost(strategyId: TeamStrategyId, memberCount: number): { low: n
     low: Math.round(base * memberCount * 0.5 * 100) / 100,
     high: Math.round(base * memberCount * 2 * 100) / 100,
   };
+}
+
+/**
+ * run-simple 默认的真实执行器：复用 agent-team 内核（fan-out 并行执行各子任务）。
+ *
+ * 容错：任一只子任务执行失败不会使整体抛出/500，而是标记为 failed，
+ * 最终 status 折叠为 completed / partial / failed。
+ */
+async function executeCollabPlan(plan: RunSimpleExecutionInput): Promise<RunSimpleExecutionResult> {
+  const harness = getGlobalHarnessManager().getHarness("local-default");
+  const cwd = harness?.rootPath ?? process.cwd();
+
+  const config: AgentTeamConfig = {
+    teamId: plan.teamId,
+    members: plan.memberSpecs.map((m) => ({
+      agentId: m.agentId,
+      adapter: createAdapterForAgent(m.agentId),
+      role: m.role,
+    })),
+    dispatchPolicy: { kind: "round-robin" },
+    eagerStart: false,
+    worktreeIsolation: false,
+    useProcessPool: false,
+    startupTimeoutMs: 30_000,
+  };
+
+  const team = await createAgentTeam(config, { cwd });
+
+  const subtaskResults: CollabSubtaskResult[] = [];
+  let syncError: string | undefined;
+
+  try {
+    for await (const ev of fanOutTask(team, {
+      fanOutId: plan.taskId,
+      cwd,
+      defaultTimeoutMs: 60_000,
+      assignments: plan.subtasks.map((s) => ({
+        subtaskId: s.subtaskId,
+        agentId: s.agentId,
+        prompt: s.prompt,
+      })),
+    })) {
+      if (ev.kind === "fanout-completed") {
+        for (const r of ev.results) {
+          const prompt = plan.subtasks.find((s) => s.subtaskId === r.subtaskId)?.prompt ?? "";
+          subtaskResults.push({
+            subtaskId: r.subtaskId,
+            agentId: r.agentId,
+            prompt,
+            status: r.error ? "failed" : "completed",
+            ...(r.finalText ? { outputTail: outputTail(r.finalText) } : {}),
+          });
+        }
+      }
+    }
+  } catch (err) {
+    syncError = err instanceof Error ? err.message : String(err);
+  } finally {
+    await team.stop().catch(() => {});
+  }
+
+  // 兜底：任何未被汇报的子任务一律记为 failed（不因单个 agent 异常导致整体 500）
+  for (const s of plan.subtasks) {
+    if (!subtaskResults.some((r) => r.subtaskId === s.subtaskId)) {
+      subtaskResults.push({
+        subtaskId: s.subtaskId,
+        agentId: s.agentId,
+        prompt: s.prompt,
+        status: "failed",
+        ...(syncError ? { outputTail: syncError } : {}),
+      });
+    }
+  }
+
+  // 保持子任务顺序与计划一致
+  const byKey = new Map<string, CollabSubtaskResult>();
+  for (const r of subtaskResults) byKey.set(r.subtaskId, r);
+  const ordered: CollabSubtaskResult[] = [];
+  for (const s of plan.subtasks) {
+    const r = byKey.get(s.subtaskId);
+    if (r) ordered.push(r);
+  }
+
+  const completed = ordered.filter((r) => r.status === "completed").length;
+  const failed = ordered.filter((r) => r.status === "failed").length;
+  const status: RunSimpleExecutionResult["status"] =
+    failed === 0 ? "completed" : completed === 0 ? "failed" : "partial";
+
+  const message =
+    failed === 0
+      ? `Task completed: ${completed} subtask(s) succeeded.`
+      : completed === 0
+        ? `Task failed: ${failed} subtask(s) all failed.`
+        : `Task partially completed: ${completed} succeeded, ${failed} failed.`;
+
+  return { status, subtaskResults: ordered, message };
+}
+
+/** 截取输出尾部（避免把过长的 agent 输出完整塞回响应） */
+function outputTail(text: string, max = 2000): string {
+  if (text.length <= max) return text;
+  return `…${text.slice(-max)}`;
 }
