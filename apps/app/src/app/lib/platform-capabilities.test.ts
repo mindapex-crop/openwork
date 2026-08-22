@@ -10,20 +10,27 @@ const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalElectron = Object.getOwnPropertyDescriptor(globalThis, "__OPENWORK_ELECTRON__");
 
 function setElectronRuntime(enabled: boolean) {
-  if (!originalWindow && typeof window === "undefined") {
-    Object.defineProperty(globalThis, "window", { value: globalThis, configurable: true });
+  // isElectronRuntime() checks `typeof window !== "undefined" &&
+  // window.__OPENWORK_ELECTRON__ != null`. In bun's test env window may not
+  // exist, so we ensure it does and set the flag on it.
+  if (typeof window === "undefined") {
+    Object.defineProperty(globalThis, "window", { value: globalThis, configurable: true, writable: true });
   }
-  Object.defineProperty(globalThis, "__OPENWORK_ELECTRON__", {
-    value: enabled ? {} : undefined,
-    configurable: true,
-  });
+  if (enabled) {
+    (window as unknown as Record<string, unknown>).__OPENWORK_ELECTRON__ = {};
+  } else {
+    delete (window as unknown as Record<string, unknown>).__OPENWORK_ELECTRON__;
+  }
 }
 
 function restoreRuntime() {
-  if (originalElectron) {
-    Object.defineProperty(globalThis, "__OPENWORK_ELECTRON__", originalElectron);
-  } else {
-    Object.defineProperty(globalThis, "__OPENWORK_ELECTRON__", { value: undefined, configurable: true });
+  const win = typeof window !== "undefined" ? (window as unknown as Record<string, unknown>) : undefined;
+  if (win) {
+    if (originalElectron?.value !== undefined) {
+      win.__OPENWORK_ELECTRON__ = originalElectron.value;
+    } else {
+      delete win.__OPENWORK_ELECTRON__;
+    }
   }
   if (originalWindow) {
     Object.defineProperty(globalThis, "window", originalWindow);

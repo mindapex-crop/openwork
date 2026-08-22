@@ -1,8 +1,8 @@
 /** @jsxImportSource react */
 import { useEffect, useReducer, useRef, useState, type ReactNode, type SetStateAction } from "react";
 import {
-  BookOpen,
   ArrowUpRight,
+  BookOpen,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -14,14 +14,17 @@ import {
   ExternalLink,
   FolderOpen,
   Globe,
+  Hash,
   LayoutGrid,
   List,
   Loader2,
+  MessageSquare,
   MonitorSmartphone,
   Plug2,
   Plus,
   Power,
   Settings2,
+  Send,
   Unplug,
   Zap,
 } from "lucide-react";
@@ -65,7 +68,18 @@ import {
 import type { McpServerEntry, McpStatusMap } from "../../../../app/types";
 import { formatRelativeTime, isDesktopRuntime, isWindowsPlatform } from "../../../../app/utils";
 import { t } from "../../../../i18n";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmModal } from "../../../design-system/modals/confirm-modal";
 import { AddMcpModal } from "../../connections/modals/add-mcp-modal";
@@ -119,6 +133,166 @@ export type SkillItem = {
 };
 
 const getSkillHiddenId = (skill: SkillItem) => `skill:${skill.name}`;
+
+type MessagingAppKey = "feishu" | "dingtalk" | "wecom" | "slack";
+
+type MessagingAppStatus = "connected" | "disconnected";
+
+type MessagingAppConfig = Record<string, string>;
+
+type MessagingAppDefinition = {
+  key: MessagingAppKey;
+  name: string;
+  description: string;
+  icon: React.ElementType;
+  iconColor: string;
+  iconBg: string;
+  fields: Array<{
+    key: string;
+    label: string;
+    placeholder?: string;
+    type?: "text" | "password";
+    required: boolean;
+    helpText?: string;
+  }>;
+};
+
+const messagingAppDefinitions: MessagingAppDefinition[] = [
+  {
+    key: "feishu",
+    name: "Feishu / Lark",
+    description: "Connect via Lark CLI MCP — endpoints and tokens for Feishu/Lark bots and APIs.",
+    icon: Send,
+    iconColor: "text-orange-11",
+    iconBg: "bg-orange-3 border-orange-6",
+    fields: [
+      {
+        key: "endpoint",
+        label: "API Endpoint",
+        placeholder: "https://open.feishu.cn/open-apis",
+        type: "text",
+        required: true,
+        helpText: "Feishu open platform API base URL.",
+      },
+      {
+        key: "access_token",
+        label: "Access Token",
+        placeholder: "app_xxxxxxxxxxxxxxxx",
+        type: "password",
+        required: true,
+        helpText: "App-level access token from your Feishu developer console.",
+      },
+    ],
+  },
+  {
+    key: "dingtalk",
+    name: "DingTalk",
+    description: "OAuth credentials or a custom robot webhook for DingTalk message delivery.",
+    icon: MessageSquare,
+    iconColor: "text-blue-11",
+    iconBg: "bg-blue-3 border-blue-6",
+    fields: [
+      {
+        key: "app_key",
+        label: "App Key",
+        placeholder: "dingXXXXXXXXXXXX",
+        type: "text",
+        required: true,
+        helpText: "OAuth App Key (required for OAuth mode).",
+      },
+      {
+        key: "app_secret",
+        label: "App Secret",
+        placeholder: "••••••••••••",
+        type: "password",
+        required: true,
+        helpText: "OAuth App Secret.",
+      },
+      {
+        key: "webhook_url",
+        label: "Webhook URL (optional)",
+        placeholder: "https://oapi.dingtalk.com/robot/send?access_token=...",
+        type: "text",
+        required: false,
+        helpText: "Custom robot webhook URL as an alternative to OAuth.",
+      },
+    ],
+  },
+  {
+    key: "wecom",
+    name: "WeCom",
+    description: "WeChat Work credentials: corp ID and agent secret for application messaging.",
+    icon: LayoutGrid,
+    iconColor: "text-green-11",
+    iconBg: "bg-green-3 border-green-6",
+    fields: [
+      {
+        key: "corp_id",
+        label: "Corp ID",
+        placeholder: "wwXXXXXXXXXXXX",
+        type: "text",
+        required: true,
+        helpText: "Your WeCom organization's corp ID.",
+      },
+      {
+        key: "agent_secret",
+        label: "Agent Secret",
+        placeholder: "••••••••••••",
+        type: "password",
+        required: true,
+        helpText: "Application-level agent secret from your WeCom admin console.",
+      },
+    ],
+  },
+  {
+    key: "slack",
+    name: "Slack",
+    description: "Bot token and signing secret for Slack Workspace bot integration.",
+    icon: Hash,
+    iconColor: "text-purple-11",
+    iconBg: "bg-purple-3 border-purple-6",
+    fields: [
+      {
+        key: "bot_token",
+        label: "Bot Token",
+        placeholder: "xoxb-XXXXXXXX-XXXXXXXX-XXXXXXXXXXXX",
+        type: "password",
+        required: true,
+        helpText: "Slack Bot User OAuth Token (xoxb-...).",
+      },
+      {
+        key: "signing_secret",
+        label: "Signing Secret",
+        placeholder: "••••••••••••",
+        type: "password",
+        required: true,
+        helpText: "Signing secret from your Slack app configuration.",
+      },
+    ],
+  },
+];
+
+const findMessagingApp = (key: MessagingAppKey): MessagingAppDefinition => {
+  const found = messagingAppDefinitions.find((app) => app.key === key);
+  if (!found) {
+    throw new Error(`Unknown messaging app: ${key}`);
+  }
+  return found;
+};
+
+type MessagingAppsState = {
+  [key in MessagingAppKey]: {
+    status: MessagingAppStatus;
+    config: MessagingAppConfig;
+  };
+};
+
+const initialMessagingAppsState: MessagingAppsState = {
+  feishu: { status: "disconnected", config: {} },
+  dingtalk: { status: "disconnected", config: {} },
+  wecom: { status: "disconnected", config: {} },
+  slack: { status: "disconnected", config: {} },
+};
 
 export type McpViewProps = {
   busy: boolean;
@@ -371,6 +545,8 @@ export function McpView(props: McpViewProps) {
   const [openworkUiMcpCommand, setOpenworkUiMcpCommand] = useState<string[] | null>(null);
   const [openworkUiMcpEnvironment, setOpenworkUiMcpEnvironment] = useState<Record<string, string> | null>(null);
   const [computerUseMcpCommand, setComputerUseMcpCommand] = useState<string[] | null>(null);
+  const [messagingAppsState, setMessagingAppsState] = useState<MessagingAppsState>(initialMessagingAppsState);
+  const [messagingAppConfigKey, setMessagingAppConfigKey] = useState<MessagingAppKey | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<ExtensionInventoryFilter>(props.initialFilter ?? "all");
   const [inventoryState, setInventoryState] = useState<ExtensionInventoryState>(props.initialState ?? "all");
@@ -1137,9 +1313,43 @@ export function McpView(props: McpViewProps) {
       />
       ) : null}
 
+      <MessagingAppsSection
+        state={messagingAppsState}
+        onOpenConfig={(key) => setMessagingAppConfigKey(key)}
+      />
+
+      <MessagingAppConfigDialog
+        open={messagingAppConfigKey !== null}
+        appKey={messagingAppConfigKey}
+        currentState={messagingAppConfigKey !== null ? messagingAppsState[messagingAppConfigKey].status : "disconnected"}
+        currentConfig={messagingAppConfigKey !== null ? messagingAppsState[messagingAppConfigKey].config : {}}
+        onClose={() => setMessagingAppConfigKey(null)}
+        onSave={(key, config) => {
+          setMessagingAppsState((prev) => ({
+            ...prev,
+            [key]: {
+              status: "connected",
+              config,
+            },
+          }));
+          setMessagingAppConfigKey(null);
+        }}
+        onDisconnect={() => {
+          if (messagingAppConfigKey === null) return;
+          setMessagingAppsState((prev) => ({
+            ...prev,
+            [messagingAppConfigKey]: {
+              status: "disconnected",
+              config: {},
+            },
+          }));
+          setMessagingAppConfigKey(null);
+        }}
+      />
+
       <ConfirmModal
-        open={logoutOpen}
-        title={t("mcp.logout_modal_title")}
+          open={logoutOpen}
+          title={t("mcp.logout_modal_title")}
         message={t("mcp.logout_modal_message").replace("{server}", displayName(logoutTarget ?? ""))}
         confirmLabel={logoutBusy ? t("mcp.logout_working") : t("mcp.logout_action")}
         cancelLabel={t("common.cancel")}
@@ -1946,6 +2156,205 @@ function McpConfigScopeButton(props: {
     >
       {props.scope === "project" ? t("mcp.scope_project") : t("mcp.scope_global")}
     </button>
+  );
+}
+
+function MessagingAppsSection(props: {
+  state: MessagingAppsState;
+  onOpenConfig: (key: MessagingAppKey) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <h3 className="text-[11px] font-semibold uppercase tracking-widest text-dls-secondary">
+        Messaging Apps
+      </h3>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-3">
+        {messagingAppDefinitions.map((app) => {
+          const appState = props.state[app.key];
+          const Icon = app.icon;
+          return (
+            <div
+              key={app.key}
+              className="group rounded-xl border border-dls-border bg-dls-surface p-4 transition-all hover:border-dls-border/80 hover:bg-dls-hover"
+            >
+              <div className="flex items-start gap-3">
+                <div className={`flex size-9 shrink-0 items-center justify-center rounded-lg border ${app.iconBg}`}>
+                  <Icon size={17} className={app.iconColor} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-dls-text">{app.name}</div>
+                  <p className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-dls-secondary">
+                    {app.description}
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <Badge
+                  variant="outline"
+                  className={appState.status === "connected"
+                    ? "border-green-6/60 bg-green-2 text-green-11"
+                    : "border-transparent bg-gray-3 text-gray-11"}
+                >
+                  {appState.status === "connected" ? "Connected" : "Disconnected"}
+                </Badge>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                  onClick={() => props.onOpenConfig(app.key)}
+                >
+                  <Settings2 size={12} />
+                  Configure
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MessagingAppConfigDialog(props: {
+  open: boolean;
+  appKey: MessagingAppKey | null;
+  currentState: MessagingAppStatus;
+  currentConfig: MessagingAppConfig;
+  onClose: () => void;
+  onSave: (key: MessagingAppKey, config: MessagingAppConfig) => void;
+  onDisconnect: () => void;
+}) {
+  const [values, setValues] = useState<MessagingAppConfig>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  const app = props.appKey !== null ? findMessagingApp(props.appKey) : null;
+
+  useEffect(() => {
+    if (props.open && app) {
+      setValues(props.currentConfig);
+      setErrors({});
+      setSaving(false);
+    }
+  }, [props.open, props.appKey]);
+
+  const handleSave = async () => {
+    if (!app || !props.appKey) return;
+    const newErrors: Record<string, string> = {};
+    for (const field of app.fields) {
+      if (field.required && !values[field.key]?.trim()) {
+        newErrors[field.key] = `${field.label} is required.`;
+      }
+    }
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
+    setSaving(true);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    setSaving(false);
+    props.onSave(props.appKey, values);
+  };
+
+  const handleDisconnect = () => {
+    props.onDisconnect();
+  };
+
+  if (!app) return null;
+
+  return (
+    <Dialog open={props.open} onOpenChange={(open) => !open && props.onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <div className="flex items-center gap-3">
+            <div className={`flex size-10 items-center justify-center rounded-xl border ${app.iconBg}`}>
+              <app.icon size={19} className={app.iconColor} />
+            </div>
+            <div>
+              <DialogTitle>{app.name}</DialogTitle>
+              <DialogDescription className="mt-0.5">
+                {props.currentState === "connected"
+                  ? "Update credentials or disconnect."
+                  : "Enter credentials to connect."}
+              </DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-4">
+          {app.fields.map((field) => (
+            <div key={field.key} className="flex flex-col gap-1.5">
+              <Label htmlFor={`im-config-${app.key}-${field.key}`}>{field.label}</Label>
+              <Input
+                id={`im-config-${app.key}-${field.key}`}
+                type={field.type === "password" ? "password" : "text"}
+                placeholder={field.placeholder}
+                value={values[field.key] ?? ""}
+                className={errors[field.key] ? "border-red-6 focus-visible:ring-red-6/30" : ""}
+                onChange={(e) => {
+                  setValues((prev) => ({ ...prev, [field.key]: e.currentTarget.value }));
+                  if (errors[field.key]) {
+                    setErrors((prev) => {
+                      const next = { ...prev };
+                      delete next[field.key];
+                      return next;
+                    });
+                  }
+                }}
+              />
+              {field.helpText ? (
+                <span className="text-[11px] text-dls-secondary/70">{field.helpText}</span>
+              ) : null}
+              {errors[field.key] ? (
+                <span className="text-[11px] text-red-11">{errors[field.key]}</span>
+              ) : null}
+            </div>
+          ))}
+        </div>
+
+        <DialogFooter>
+          <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+            {props.currentState === "connected" ? (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleDisconnect}
+              >
+                Disconnect
+              </Button>
+            ) : (
+              <span />
+            )}
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={props.onClose}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={saving}
+                onClick={handleSave}
+              >
+                {saving ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={13} />
+                    {props.currentState === "connected" ? "Save changes" : "Connect"}
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

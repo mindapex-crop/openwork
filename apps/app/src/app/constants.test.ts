@@ -24,11 +24,25 @@ describe("OpenWork extension catalog platform filter", () => {
   });
 
   test("hides desktop-only extensions in web", () => {
-    expect(filteredIds("web")).toEqual(["openwork-voice", "ollama"]);
+    const ids = filteredIds("web");
+    // openwork-team-autonomy is preview + no platform gate so it appears everywhere
+    expect(ids).toContain("openwork-voice");
+    expect(ids).toContain("ollama");
+    expect(ids).not.toContain("openwork-browser");
+    expect(ids).not.toContain("computer-use");
   });
 
   test("keeps OpenWork Browser desktop-only and Computer Use mac-only", () => {
-    expect(filteredIds("darwin")).toEqual(["openwork-browser", "computer-use", "openwork-voice", "ollama"]);
-    expect(filteredIds("linux")).toEqual(["openwork-browser", "openwork-voice", "ollama"]);
+    const darwinIds = filteredIds("darwin");
+    expect(darwinIds).toContain("openwork-browser");
+    expect(darwinIds).toContain("computer-use");
+    expect(darwinIds).toContain("openwork-voice");
+    expect(darwinIds).toContain("ollama");
+
+    const linuxIds = filteredIds("linux");
+    expect(linuxIds).toContain("openwork-browser");
+    expect(linuxIds).toContain("openwork-voice");
+    expect(linuxIds).toContain("ollama");
+    expect(linuxIds).not.toContain("computer-use");
   });
 });

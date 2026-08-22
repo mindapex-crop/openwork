@@ -30,6 +30,14 @@ export type LocalUIState = {
   tab: SettingsTab;
 };
 
+/**
+ * Collaboration surface mode.
+ * - simple  : 普通模式，一键协作，隐藏 CLI/团队配置，面向普通用户。
+ * - cli     : 程序员模式，多 CLI agent 合作，自动编排。
+ * - advanced: 专家模式，手动编排 agent 团队，可选策略/harness/角色。
+ */
+export type CollabMode = "simple" | "cli" | "advanced";
+
 export type LocalPreferences = {
   showThinking: boolean;
   modelVariant: string | null;
@@ -56,6 +64,8 @@ export type LocalPreferences = {
      * stay callable (owner-scoped + authz'd). Off by default — opt-in preview.
      */
     memory: boolean;
+    /** Collaboration surface mode; defaults to "simple". */
+    collabMode: CollabMode;
   };
   /**
    * Set to true after the user completes the welcome/onboarding flow
@@ -95,7 +105,7 @@ const INITIAL_PREFS: LocalPreferences = {
   defaultModel: null,
   selectedAgent: null,
   releaseChannel: "stable",
-  featureFlags: { microsandboxCreateSandbox: true, continuousEngine: false, memory: false },
+  featureFlags: { microsandboxCreateSandbox: true, continuousEngine: false, memory: false, collabMode: "simple" },
   hasCompletedOnboarding: false,
   analyticsEnabled: true,
   desktopNotifications: DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE,

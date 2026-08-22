@@ -28,6 +28,7 @@ import {
   LayoutStack,
 } from "../settings-layout";
 import { DesktopIntegrationSection } from "../desktop-integration-section";
+import { CollabModeSection } from "../collab-mode-section";
 
 export type PreferencesViewProps = {
   busy: boolean;
@@ -67,6 +68,8 @@ export function PreferencesView(props: PreferencesViewProps) {
 
   return (
     <LayoutStack>
+      <CollabModeSection />
+
       <LayoutSection>
         <LayoutSectionHeader>
           <LayoutSectionTitle>{t("settings.model_title")}</LayoutSectionTitle>
