@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ChangeEvent, type KeyboardEvent } from "react";
 import {
   Bot,
   Plus,
@@ -16,17 +16,17 @@ import {
   Users,
   User,
 } from "lucide-react";
-import { Button } from "../../../components/ui/button";
-import { Input } from "../../../components/ui/input";
-import { Label } from "../../../components/ui/label";
-import { Textarea } from "../../../components/ui/textarea";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "../../../components/ui/card";
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -35,24 +35,24 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "../../../components/ui/dialog";
+} from "@/components/ui/dialog";
 import {
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-} from "../../../components/ui/tabs";
+} from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../../../components/ui/select";
-import { Badge } from "../../../components/ui/badge";
-import { ScrollArea, ScrollAreaViewport } from "../../../components/ui/scroll-area";
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea, ScrollAreaViewport } from "@/components/ui/scroll-area";
 import { SettingsGroupHeader } from "../settings-section";
-import { cn } from "../../../lib/utils";
+import { cn } from "@/lib/utils";
 
 interface AgentDefinition {
   id: string;
@@ -233,9 +233,8 @@ export function AgentManagementView() {
   return (
     <div className="space-y-6">
       <SettingsGroupHeader
-        title="智能体管理"
-        description="创建、编辑和管理智能体。智能体可作为团队模式和单人模式的可调用对象。"
-        icon={<Bot size={18} />}
+        label="智能体管理"
+        hint="创建、编辑和管理智能体"
       />
 
       <div className="flex items-center gap-3">
@@ -244,7 +243,7 @@ export function AgentManagementView() {
           <Input
             placeholder="搜索智能体..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
             className="pl-8"
           />
         </div>
@@ -254,7 +253,7 @@ export function AgentManagementView() {
         </Button>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
+      <Tabs value={activeTab} onValueChange={(v: string) => setActiveTab(v as typeof activeTab)}>
         <TabsList>
           <TabsTrigger value="all">
             <User className="mr-1 h-3.5 w-3.5" />
@@ -327,7 +326,7 @@ export function AgentManagementView() {
               <Input
                 id="agent-name"
                 value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, name: e.target.value })}
                 placeholder="例如：代码审查专家"
               />
             </div>
@@ -337,7 +336,7 @@ export function AgentManagementView() {
               <Input
                 id="agent-desc"
                 value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, description: e.target.value })}
                 placeholder="智能体的功能简介"
               />
             </div>
@@ -347,8 +346,8 @@ export function AgentManagementView() {
               <div className="flex gap-2">
                 <Input
                   value={form.tagInput}
-                  onChange={(e) => setForm({ ...form, tagInput: e.target.value })}
-                  onKeyDown={(e) => {
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, tagInput: e.target.value })}
+                  onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
                       addTag();
@@ -384,7 +383,7 @@ export function AgentManagementView() {
                 <Label>推荐 Provider</Label>
                 <Select
                   value={form.providerID}
-                  onValueChange={(v) => setForm({ ...form, providerID: v })}
+                  onValueChange={(v: string | null) => setForm({ ...form, providerID: v ?? "" })}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="选择 Provider" />
@@ -403,7 +402,7 @@ export function AgentManagementView() {
                 <Label>推荐 Model</Label>
                 <Input
                   value={form.modelID}
-                  onChange={(e) => setForm({ ...form, modelID: e.target.value })}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, modelID: e.target.value })}
                   placeholder="例如：deepseek-coder"
                   disabled={!form.providerID}
                 />
@@ -446,7 +445,7 @@ export function AgentManagementView() {
               <Textarea
                 id="agent-prompt"
                 value={form.systemPrompt}
-                onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setForm({ ...form, systemPrompt: e.target.value })}
                 placeholder="定义智能体的 system prompt..."
                 className="min-h-[150px] font-mono text-sm"
               />

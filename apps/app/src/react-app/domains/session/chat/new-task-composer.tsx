@@ -27,6 +27,10 @@ import { resolveAttachmentFileMetadata } from "@/react-app/domains/session/sync/
  * so choices made before the session exists carry into the session that the
  * hero creates.
  */
+export type { TaskMode } from "./task-mode";
+export { frameTaskPrompt, resolveTaskModeVariant } from "./task-mode";
+import type { TaskMode } from "./task-mode";
+
 export type NewTaskComposerContext = {
   client: OpenworkServerClient | null;
   workspaceId: string | null;
@@ -58,6 +62,10 @@ export type NewTaskComposerContext = {
   isRemoteWorkspace: boolean;
   isSandboxWorkspace: boolean;
   onOpenSettingsSection?: (section: "commands" | "skills" | "mcps" | "plugins" | "extensions") => void;
+  /** Task execution mode chosen on the hero. Controls model-variant bias and
+   *  automatic prompt framing (e.g. plan mode adds a planning preamble). */
+  taskMode: TaskMode;
+  onTaskModeChange?: (mode: TaskMode) => void;
 };
 
 export type NewTaskComposerProps = {

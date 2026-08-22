@@ -93,8 +93,13 @@ import { useLocal } from "@/react-app/kernel/local-provider";
 import { usePlatform } from "@/react-app/kernel/platform";
 import { SessionPage, type OpenSessionTab } from "@/react-app/domains/session/chat/session-page";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
+import { ProjectsPage } from "@/react-app/domains/projects";
+import { SkillMarketplacePage } from "@/react-app/domains/skills";
+import { MarketplacePage } from "@/react-app/domains/marketplace/marketplace-page";
+import { KnowledgePage } from "@/react-app/domains/knowledge/knowledge-page";
 import { automationsStateChangedEvent } from "@/react-app/domains/automations/automation-events";
-import type { NewTaskComposerContext } from "@/react-app/domains/session/chat/new-task-composer";
+import type { NewTaskComposerContext, TaskMode } from "@/react-app/domains/session/chat/new-task-composer";
+import { frameTaskPrompt, resolveTaskModeVariant } from "@/react-app/domains/session/chat/new-task-composer";
 import { isDesktopProviderBlocked } from "@/app/cloud/desktop-app-restrictions";
 import { useCheckDesktopRestriction } from "@/react-app/domains/cloud/desktop-config-provider";
 import { useRestrictionNotice } from "@/react-app/domains/cloud/restriction-notice-provider";
@@ -475,6 +480,16 @@ export function SessionRoute() {
   const local = useLocal();
   const automationsEnabled = isDesktopRuntime();
   const automationsRouteActive = automationsEnabled && automationsRouteRequested;
+  const projectsRouteRequested = /^\/projects(?:\/|$)/.test(location.pathname);
+  const skillsRouteRequested = /^\/skills(?:\/|$)/.test(location.pathname);
+  const marketplaceRouteRequested = /^\/marketplace(?:\/|$)/.test(location.pathname);
+  const knowledgeRouteRequested = /^\/knowledge(?:\/|$)/.test(location.pathname);
+  const projectsRouteActive = projectsRouteRequested;
+  const skillsRouteActive = skillsRouteRequested;
+  const marketplaceRouteActive = marketplaceRouteRequested;
+  const knowledgeRouteActive = knowledgeRouteRequested;
+  const collabRouteRequested = /^\/collab-hub(?:\/|$)/.test(location.pathname);
+  const collabRouteActive = collabRouteRequested;
   const denSettings = readDenSettings();
   const [automationsSupported, setAutomationsSupported] = useState(false);
   const [automationsNeedAttention, setAutomationsNeedAttention] = useState(false);
@@ -651,6 +666,10 @@ export function SessionRoute() {
   const [renameWorkspaceId, setRenameWorkspaceId] = useState<string | null>(null);
   const [renameWorkspaceTitle, setRenameWorkspaceTitle] = useState("");
   const [renameWorkspaceBusy, setRenameWorkspaceBusy] = useState(false);
+  // Task execution mode surfaced on the empty hero. Toggles the model-variant
+  // bias (ask→fast, craft→balanced, plan→deep/reasoning) as well as the
+  // automatic prompt framing used when submitting a new task.
+  const [taskMode, setTaskMode] = useState<TaskMode>("ask");
   const [paletteAccessibleTargets, setPaletteAccessibleTargets] = useState<OpenTarget[]>([]);
   const [providers, setProviders] = useState<ProviderListItem[]>([]);
   const [providerDefaults, setProviderDefaults] = useState<Record<string, string>>({});
@@ -1640,7 +1659,10 @@ export function SessionRoute() {
       openWorkModelsEntitled,
       openWorkModelsSyncing,
       modelVariantLabel,
-      modelVariant: modelVariantValue,
+      // Bias the model behaviour to the task mode the user picked on the
+      // empty-state hero. If the user has explicitly picked a variant in the
+      // session model preferences we respect that choice (non-null).
+      modelVariant: local.prefs.modelVariant ?? resolveTaskModeVariant(taskMode, modelVariantValue),
       modelBehaviorOptions,
       onModelVariantChange: (value: string | null) => {
         local.setPrefs((previous) => ({ ...previous, modelVariant: value }));
@@ -1670,6 +1692,8 @@ export function SessionRoute() {
       onOpenSettingsSection: (section: "commands" | "skills" | "mcps" | "plugins" | "extensions") => {
         handleOpenExtensions(section === "skills" ? "skills" : section === "mcps" ? "mcps" : section === "plugins" ? "plugins" : "");
       },
+      taskMode,
+      onTaskModeChange: (mode: TaskMode) => setTaskMode(mode),
     };
   }, [
     client,
@@ -1697,6 +1721,7 @@ export function SessionRoute() {
     selectedWorkspaceRoot,
     sessionProviderAuthStore,
     setSelectedAgent,
+    taskMode,
   ]);
 
   const handleOpenCreateWorkspace = useCallback(() => {
@@ -2498,9 +2523,10 @@ export function SessionRoute() {
         handleOpenCreateWorkspace();
         return;
       }
-      await handleCreateWorkspace("starter", folder, { firstTaskPrompt: prompt, firstTaskAttachments: attachments ?? [] });
+      const framed = frameTaskPrompt(taskMode, prompt);
+      await handleCreateWorkspace("starter", folder, { firstTaskPrompt: framed, firstTaskAttachments: attachments ?? [] });
     })();
-  }, [handleCreateWorkspace, handleOpenCreateWorkspace]);
+  }, [handleCreateWorkspace, handleOpenCreateWorkspace, taskMode]);
 
   const createWorkspaceControlAction = useMemo<OpenworkControlAction>(() => ({
     id: "workspace.create",
@@ -2678,8 +2704,16 @@ export function SessionRoute() {
           }}
         />
       }
-      primaryTitle={automationsRouteActive ? "Automations" : undefined}
-      primarySlot={automationsRouteActive ? (
+      primaryTitle={projectsRouteActive ? "Projects" : knowledgeRouteActive ? "Knowledge" : marketplaceRouteActive ? "Marketplace" : skillsRouteActive ? "技能与 Agent 广场" : automationsRouteActive ? "Automations" : undefined}
+      primarySlot={projectsRouteActive ? (
+        <ProjectsPage onClose={() => navigate("/session")} />
+      ) : knowledgeRouteActive ? (
+        <KnowledgePage onClose={() => navigate("/session")} />
+      ) : marketplaceRouteActive ? (
+        <MarketplacePage onClose={() => navigate("/session")} />
+      ) : skillsRouteActive ? (
+        <SkillMarketplacePage onClose={() => navigate("/session")} />
+      ) : automationsRouteActive ? (
         <AutomationsPage providerCatalog={providerCatalog} />
       ) : undefined}
       terminalOpen={terminalOpen}
@@ -2705,6 +2739,26 @@ export function SessionRoute() {
               navigate(automationsRoute());
             }
           : undefined,
+        projectsActive: projectsRouteActive,
+        onOpenProjects: () => {
+          navigate("/projects");
+        },
+        skillsActive: skillsRouteActive,
+        onOpenSkills: () => {
+          navigate("/skills");
+        },
+        marketplaceActive: marketplaceRouteActive,
+        onOpenMarketplace: () => {
+          navigate("/marketplace");
+        },
+        knowledgeActive: knowledgeRouteActive,
+        onOpenKnowledge: () => {
+          navigate("/knowledge");
+        },
+        collabActive: collabRouteActive,
+        onOpenCollab: () => {
+          navigate("/collab-hub");
+        },
         onSelectWorkspace: async (workspaceId) => {
           if (workspaceId === selectedWorkspaceId) return true;
           setLegacySelectedWorkspaceId(workspaceId);
@@ -2780,7 +2834,7 @@ export function SessionRoute() {
               if (workspaceId === selectedWorkspaceId) {
                 void refreshCloudProviderSync("new_chat");
               }
-              const firstTaskPrompt = prompt.trim();
+              const firstTaskPrompt = frameTaskPrompt(taskMode, prompt);
               if (firstTaskPrompt) {
                 const firstTaskAttachments = attachments ?? [];
                 // Attachment chips only survive in-memory (File objects), so the

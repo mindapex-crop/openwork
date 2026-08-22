@@ -19,14 +19,19 @@ import {
   Plus,
   Search,
   Share2,
+  Store,
   Trash2,
   RefreshCw,
   RotateCcw,
   Settings,
+  BookOpen,
   FolderOpen,
   SquarePen,
   Tag,
   X,
+  FolderKanban,
+  Sparkles,
+  Users,
 } from "lucide-react";
 import { LazyMotion, Reorder, domMax, m, useDragControls } from "motion/react";
 
@@ -850,6 +855,16 @@ export type AppSidebarProps = {
   automationsActive?: boolean;
   automationsNeedAttention?: boolean;
   onOpenAutomations?: () => void;
+  projectsActive?: boolean;
+  onOpenProjects?: () => void;
+  skillsActive?: boolean;
+  onOpenSkills?: () => void;
+  knowledgeActive?: boolean;
+  onOpenKnowledge?: () => void;
+  marketplaceActive?: boolean;
+  collabActive?: boolean;
+  onOpenMarketplace?: () => void;
+  onOpenCollab?: () => void;
   /** Opens the cross-session message search dialog (Cmd/Ctrl+Shift+F). */
   onOpenSessionSearch?: () => void;
   /** Back/forward across recently viewed conversations, rendered at the top of the sidebar. */
@@ -1161,6 +1176,46 @@ export function AppSidebar(props: AppSidebarProps) {
                   </span>
                 )}
                 onSelect={props.onOpenAutomations}
+              />
+            ) : null}
+            {props.onOpenProjects ? (
+              <SidebarDestination
+                active={props.projectsActive === true}
+                icon={FolderKanban}
+                label="Projects"
+                onSelect={props.onOpenProjects}
+              />
+            ) : null}
+            {props.onOpenSkills ? (
+              <SidebarDestination
+                active={props.skillsActive === true}
+                icon={Sparkles}
+                label="Skills"
+                onSelect={props.onOpenSkills}
+              />
+            ) : null}
+            {props.onOpenCollab ? (
+              <SidebarDestination
+                active={props.collabActive === true}
+                icon={Users}
+                label="协作"
+                onSelect={props.onOpenCollab}
+              />
+            ) : null}
+            {props.onOpenMarketplace ? (
+              <SidebarDestination
+                active={props.marketplaceActive === true || false}
+                icon={Store}
+                label="Marketplace"
+                onSelect={props.onOpenMarketplace}
+              />
+            ) : null}
+            {props.onOpenKnowledge ? (
+              <SidebarDestination
+                active={props.knowledgeActive === true}
+                icon={BookOpen}
+                label="Knowledge"
+                onSelect={props.onOpenKnowledge}
               />
             ) : null}
             <SidebarDestination

@@ -1,10 +1,11 @@
 /** @jsxImportSource react */
-import { useEffect, useState } from "react";
-import { ArrowRight, X, Zap } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, MessageSquare, Sparkles, X, Zap, Lightbulb } from "lucide-react";
 
 import { DEFAULT_MODEL } from "@/app/constants";
 import type { ComposerAttachment } from "@/app/types";
 import { resolveOrganizationPromptCardContent } from "@/components/chat/task-suggestions";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCheckDesktopRestriction, useOrgRestrictions } from "@/react-app/domains/cloud/desktop-config-provider";
 import { useDenAuth } from "@/react-app/domains/cloud/den-auth-provider";
 import {
@@ -15,7 +16,7 @@ import {
   useOpenWorkModelsPromoEligibility,
 } from "@/react-app/domains/cloud/openwork-models-promo";
 import { usePlatform } from "@/react-app/kernel/platform";
-import { NewTaskComposer, type NewTaskComposerContext } from "./new-task-composer";
+import { NewTaskComposer, type NewTaskComposerContext, type TaskMode } from "./new-task-composer";
 
 type HeroSuggestion = {
   title: string;
@@ -79,6 +80,37 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
     return () => window.removeEventListener(openWorkModelsPromoChangedEvent, handlePromoChanged);
   }, []);
 
+  // Pull task-mode state from the composer wiring if present; otherwise keep
+  // a local fallback so the hero still looks correct before the workspace
+  // client finishes initialising.
+  const taskModeFromContext = props.composer?.taskMode ?? "ask";
+  const canChangeMode = Boolean(props.composer?.onTaskModeChange);
+  const taskModes = useMemo<
+    { value: TaskMode; label: string; description: string; icon: React.ComponentType<{ className?: string }> }[]
+  >(
+    () => [
+      {
+        value: "ask",
+        label: "Ask",
+        description: "Quick answers and explanations.",
+        icon: MessageSquare,
+      },
+      {
+        value: "craft",
+        label: "Craft",
+        description: "Build or change things end-to-end.",
+        icon: Sparkles,
+      },
+      {
+        value: "plan",
+        label: "Plan",
+        description: "Draft a plan before running anything.",
+        icon: Lightbulb,
+      },
+    ],
+    [],
+  );
+
   // Quiet inline lead to OpenWork Models: replaces the old startup dialog
   // interrupt. Shown only while the session runs on the free starter model
   // (the built-in `opencode` provider) and the hosted offering applies.
@@ -119,6 +151,36 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
           What do you need done?
         </h2>
         <p className="text-[13px] text-muted-foreground">Describe it in plain language</p>
+      </div>
+
+      <div className="flex justify-center">
+        <Tabs
+          value={taskModeFromContext}
+          onValueChange={(next) => {
+            if (!canChangeMode) return;
+            const mode = (next as TaskMode) ?? "ask";
+            props.composer?.onTaskModeChange?.(mode);
+          }}
+        >
+          <TabsList
+            className="h-10 gap-0.5 rounded-xl border border-border/70 bg-muted/40 p-0.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur"
+          >
+            {taskModes.map((mode) => {
+              const ModeIcon = mode.icon;
+              return (
+                <TabsTrigger
+                  key={mode.value}
+                  value={mode.value}
+                  className="h-9 min-w-[108px] rounded-[10px] px-3.5 text-[13px] font-medium tracking-[-0.01em] text-muted-foreground/80 transition-all data-active:bg-background data-active:text-foreground data-active:shadow-[0_1px_0_rgba(255,255,255,0.06),0_0_0_1px_rgba(255,255,255,0.04)]"
+                  title={mode.description}
+                >
+                  <ModeIcon className="mr-1.5 size-4" />
+                  {mode.label}
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
+        </Tabs>
       </div>
 
       <NewTaskComposer

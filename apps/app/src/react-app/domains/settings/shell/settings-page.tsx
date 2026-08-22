@@ -10,6 +10,7 @@ import {
   Cog,
   FolderLock,
   Info,
+  MessageCircle,
   Paintbrush,
   Puzzle,
   RefreshCcw,
@@ -96,6 +97,8 @@ export function getSettingsTabIcon(tab: SettingsTab) {
       return ShieldCheck;
     case "debug":
       return Bug;
+    case "im-connectors":
+      return MessageCircle;
     default:
       return Cog;
   }
@@ -135,6 +138,8 @@ export function getSettingsTabLabel(tab: SettingsTab) {
       return t("settings.tab_recovery");
     case "debug":
       return t("settings.tab_debug");
+    case "im-connectors":
+      return "IM 连接器";
     case "general":
       return "Settings";
     default:
@@ -176,6 +181,8 @@ export function getSettingsTabDescription(tab: SettingsTab) {
       return t("settings.tab_description_recovery");
     case "debug":
       return t("settings.tab_description_debug");
+    case "im-connectors":
+      return "将 OpenWork 接入飞书、企业微信、钉钉、Slack 等消息平台";
     case "general":
       return "Overview of all settings";
     default:
@@ -200,10 +207,11 @@ export function getGlobalSettingsTabs(
 
 export const CLOUD_SETTINGS_TABS: SettingsTab[] = [
   "cloud-account",
+  "im-connectors",
 ];
 
-export function isSettingsTabBeta(_tab: SettingsTab) {
-  return false;
+export function isSettingsTabBeta(tab: SettingsTab) {
+  return tab === "im-connectors";
 }
 
 export function isSettingsTabActive(activeTab: SettingsTab, tab: SettingsTab) {
@@ -238,7 +246,9 @@ function SettingsSidebarTabLabel({ tab }: { tab: SettingsTab }) {
  * surfaces (sidebar + compact section menu) must use this so they can't drift.
  */
 export function getCloudSettingsTabs(memoryEnabled: boolean): SettingsTab[] {
-  return memoryEnabled ? ["cloud-account", "memory"] : CLOUD_SETTINGS_TABS;
+  return memoryEnabled
+    ? ["cloud-account", "im-connectors", "memory"]
+    : CLOUD_SETTINGS_TABS;
 }
 
 type SettingsPageProps = {

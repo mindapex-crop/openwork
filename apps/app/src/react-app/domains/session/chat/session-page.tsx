@@ -2,6 +2,7 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
+import { useNavigate } from "react-router";
 import { Cloud, FileText, Globe, Kanban, Mic2, MoreHorizontal, PanelRight, TextSearch, Zap } from "lucide-react";
 
 import { resolveExtensionIconSrc } from "@/react-app/design-system/extension-icon-src";
@@ -52,6 +53,8 @@ import { ConfirmModal } from "../../../design-system/modals/confirm-modal";
 import { usePlatform } from "../../../kernel/platform";
 import { useDenAuth } from "../../cloud/den-auth-provider";
 import ProviderAuthModal, { type ProviderAuthModalProps } from "../../connections/provider-auth/provider-auth-modal";
+import { useCollabMode } from "../../settings/state/feature-flags-preferences";
+import { CollabEntryTab } from "../collab-entry-tab";
 import { RenameSessionModal } from "../modals/rename-session-modal";
 import { AppSidebar } from "../sidebar/app-sidebar";
 import { useSessionManagementStore } from "../sidebar/session-management-store";
@@ -164,6 +167,16 @@ export type SessionPageSidebarProps = {
   automationsActive?: boolean;
   automationsNeedAttention?: boolean;
   onOpenAutomations?: () => void;
+  projectsActive?: boolean;
+  onOpenProjects?: () => void;
+  skillsActive?: boolean;
+  onOpenSkills?: () => void;
+  collabActive?: boolean;
+  onOpenCollab?: () => void;
+  marketplaceActive?: boolean;
+  onOpenMarketplace?: () => void;
+  knowledgeActive?: boolean;
+  onOpenKnowledge?: () => void;
   /** Opens the cross-session message search dialog (Cmd/Ctrl+Shift+F). */
   onOpenSessionSearch?: () => void;
   onReorderWorkspaces?: (workspaceIds: string[]) => void;
@@ -317,6 +330,8 @@ function controlStringArg(args: unknown, key: string) {
 }
 
 export function SessionPage(props: SessionPageProps) {
+  const navigate = useNavigate();
+  const { collabMode } = useCollabMode();
   const { config: shellConfig } = useShellConfig();
   const platform = usePlatform();
   const denAuth = useDenAuth();
@@ -1080,6 +1095,10 @@ export function SessionPage(props: SessionPageProps) {
           automationsActive={props.sidebar.automationsActive}
           automationsNeedAttention={props.sidebar.automationsNeedAttention}
           onOpenAutomations={props.sidebar.onOpenAutomations}
+          projectsActive={props.sidebar.projectsActive}
+          onOpenProjects={props.sidebar.onOpenProjects}
+          skillsActive={props.sidebar.skillsActive}
+          onOpenSkills={props.sidebar.onOpenSkills}
           conversationHistory={{
             canGoBack: canGoBackInConversationHistory,
             canGoForward: canGoForwardInConversationHistory,
@@ -1139,6 +1158,7 @@ export function SessionPage(props: SessionPageProps) {
             </div>
 
             <div className="flex items-center gap-1.5 text-gray-10 mac:titlebar-no-drag">
+              <CollabEntryTab mode={collabMode} onClose={() => navigate("/collab-hub")} />
               {!props.primarySlot && findButtonSessionId && !hasMainContentTakeover ? (
                 <Tooltip>
                   <TooltipTrigger

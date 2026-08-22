@@ -4,12 +4,14 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
+  Cloud,
   Cpu,
   Gauge,
   GitBranch,
   Network,
   Plus,
   Play,
+  RefreshCw,
   Rocket,
   Server,
   Settings,
@@ -368,7 +370,7 @@ export function TeamPanel(props: TeamPanelProps) {
                   <span className="text-sm font-medium">Strategy Presets</span>
                 </div>
                 <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-                  <DialogTrigger asChild>
+                  <DialogTrigger>
                     <Button size="sm" variant="outline">
                       <Plus size={14} className="mr-1" />
                       Create Team
@@ -792,7 +794,7 @@ function CreateTeamDialog(props: CreateTeamDialogProps) {
 
         <div className="space-y-2">
           <Label>Harness Environment</Label>
-          <Select value={harnessId} onValueChange={setHarnessId}>
+          <Select value={harnessId} onValueChange={(v: string | null) => setHarnessId(v ?? "")}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -823,7 +825,7 @@ function CreateTeamDialog(props: CreateTeamDialogProps) {
                   onChange={(e) => updateMember(i, "agentId", e.target.value)}
                   className="flex-1"
                 />
-                <Select value={member.role} onValueChange={(v) => updateMember(i, "role", v)}>
+                <Select value={member.role} onValueChange={(v: string | null) => updateMember(i, "role", v ?? "")}>
                   <SelectTrigger className="w-28">
                     <SelectValue />
                   </SelectTrigger>
@@ -861,45 +863,3 @@ function CreateTeamDialog(props: CreateTeamDialogProps) {
   );
 }
 
-// RefreshCw component (not in UI library, inline it)
-function RefreshCw(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      {...props}
-    >
-      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-      <path d="M21 3v5h-5" />
-      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-      <path d="M8 16H3v5" />
-    </svg>
-  );
-}
-
-// Cloud icon (inline)
-function Cloud(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      {...props}
-    >
-      <path d="M17.5 19a4.5 4.5 0 1 0 0-9h-1.8A7 7 0 1 0 4 15.9" />
-    </svg>
-  );
-}

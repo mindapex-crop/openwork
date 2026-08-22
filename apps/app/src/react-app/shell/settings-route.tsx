@@ -98,6 +98,7 @@ import { ExtensionsView, type ExtensionsSection } from "@/react-app/domains/sett
 import { McpView } from "@/react-app/domains/settings/pages/mcp-view";
 import { RecoveryView } from "@/react-app/domains/settings/pages/recovery-view";
 import { UpdatesView } from "@/react-app/domains/settings/pages/updates-view";
+import { ImConnectorsSection } from "@/react-app/domains/settings/im-connectors-section";
 import { useDebugViewModel } from "@/react-app/domains/settings/state/debug-view-model";
 import { useElectronUpdaterState } from "@/react-app/domains/settings/state/electron-updater-state";
 import { CloudSessionProvider, useCloudSession } from "@/react-app/domains/settings/cloud/cloud-session-provider";
@@ -2403,6 +2404,8 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
         );
       case "memory":
         return <MemoryView onOpenAccount={openCloudAccountSettings} />;
+      case "im-connectors":
+        return <ImConnectorsSection />;
       case "cloud-providers":
         return (
           <CloudProvidersView

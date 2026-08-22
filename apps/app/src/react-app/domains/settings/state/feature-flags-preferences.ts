@@ -1,6 +1,8 @@
 import { useCallback } from "react";
 
-import { useLocal } from "../../../kernel/local-provider";
+import { useLocal, type CollabMode } from "../../../kernel/local-provider";
+
+export type { CollabMode } from "../../../kernel/local-provider";
 
 export function useFeatureFlagsPreferences() {
   const { prefs, setPrefs } = useLocal();
@@ -50,4 +52,35 @@ export function useFeatureFlagsPreferences() {
     memoryEnabled,
     toggleMemory,
   };
+}
+
+/**
+ * Collaboration surface mode preference. Older persisted data may not contain
+ * `collabMode` (shallow merge in LocalProvider), so treat anything other than
+ * "cli" as the safe default "simple".
+ */
+export function useCollabMode(): {
+  collabMode: CollabMode;
+  setCollabMode: (mode: CollabMode) => void;
+} {
+  const { prefs, setPrefs } = useLocal();
+
+  const storedMode = prefs.featureFlags?.collabMode;
+  const collabMode: CollabMode =
+    storedMode === "cli" || storedMode === "advanced" ? storedMode : "simple";
+
+  const setCollabMode = useCallback(
+    (mode: CollabMode) => {
+      setPrefs((previous) => ({
+        ...previous,
+        featureFlags: {
+          ...previous.featureFlags,
+          collabMode: mode,
+        },
+      }));
+    },
+    [setPrefs],
+  );
+
+  return { collabMode, setCollabMode };
 }
