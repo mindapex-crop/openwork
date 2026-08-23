@@ -455,6 +455,30 @@ export function AppRoot() {
                 }
               />
               <Route
+                path="/experts"
+                element={
+                  <DevProfiler id="ExpertsRoute">
+                    <SessionRoute />
+                  </DevProfiler>
+                }
+              />
+              <Route
+                path="/projects"
+                element={
+                  <DevProfiler id="ProjectsRoute">
+                    <SessionRoute />
+                  </DevProfiler>
+                }
+              />
+              <Route
+                path="/inspiration"
+                element={
+                  <DevProfiler id="InspirationRoute">
+                    <SessionRoute />
+                  </DevProfiler>
+                }
+              />
+              <Route
                 path="/workspace/:workspaceId/extensions/*"
                 element={
                   <DevProfiler id="SessionRoute">

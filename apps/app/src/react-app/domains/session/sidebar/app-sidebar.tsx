@@ -7,18 +7,23 @@ import {
   ArchiveRestore,
   ArrowLeft,
   ArrowRight,
+  BookOpen,
+  Bot,
   Clock3,
   ChevronRight,
   Columns2,
+  FolderKanban,
   FolderPlus,
-  LayoutGrid,
+  Lightbulb,
   MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
+  PlugZap,
   Plus,
   Search,
   Share2,
+  Sparkles,
   Trash2,
   RefreshCw,
   RotateCcw,
@@ -26,6 +31,7 @@ import {
   FolderOpen,
   SquarePen,
   Tag,
+  Users,
   X,
 } from "lucide-react";
 import { LazyMotion, Reorder, domMax, m, useDragControls } from "motion/react";
@@ -45,7 +51,7 @@ import {
   isMacPlatform,
   isWindowsPlatform,
 } from "../../../../app/utils";
-import { t } from "../../../../i18n";
+import { t, subscribeLocale, currentLocale } from "../../../../i18n";
 import { useBrandLogoUrl } from "../../cloud/brand-theme";
 import { canCreateWorkspaces } from "../../../../app/lib/workspace-creation-policy";
 
@@ -871,6 +877,24 @@ export type AppSidebarProps = {
   automationsActive?: boolean;
   automationsNeedAttention?: boolean;
   onOpenAutomations?: () => void;
+  /** Opens the assistant chat home (the session route). */
+  assistantActive?: boolean;
+  onOpenAssistant?: () => void;
+  /** Opens the Experts module page. */
+  expertsActive?: boolean;
+  onOpenExperts?: () => void;
+  /** Opens the Library skills section. */
+  skillsActive?: boolean;
+  onOpenSkills?: () => void;
+  /** Opens the Library connections section. */
+  connectorsActive?: boolean;
+  onOpenConnectors?: () => void;
+  /** Opens the Projects module page. */
+  projectsActive?: boolean;
+  onOpenProjects?: () => void;
+  /** Opens the Inspiration module page. */
+  inspirationActive?: boolean;
+  onOpenInspiration?: () => void;
   /** Opens the cross-session message search dialog (Cmd/Ctrl+Shift+F). */
   onOpenSessionSearch?: () => void;
   /** Back/forward across recently viewed conversations, rendered at the top of the sidebar. */
@@ -903,6 +927,8 @@ function isSessionActivityStatus(status: string | undefined): status is SessionA
 }
 
 export function AppSidebar(props: AppSidebarProps) {
+  // Re-render when the user switches languages so every t() label updates immediately.
+  React.useSyncExternalStore(subscribeLocale, currentLocale);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = React.useState<Set<string>>(
     () => new Set(),
   );
@@ -1164,14 +1190,55 @@ export function AppSidebar(props: AppSidebarProps) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ) : null}
+            <SidebarMenuItem>
+              <NotificationBell variant="sidebar-row" />
+            </SidebarMenuItem>
+          </SidebarMenu>
+          <SidebarMenu data-sidebar-module-nav>
+            <SidebarDestination
+              active={props.assistantActive === true}
+              icon={Bot}
+              label={t("sidebar.assistant")}
+              onSelect={props.onOpenAssistant ?? (() => {})}
+            />
+            {props.onOpenExperts ? (
+              <SidebarDestination
+                active={props.expertsActive === true}
+                icon={Users}
+                label={t("sidebar.experts")}
+                onSelect={props.onOpenExperts}
+              />
+            ) : null}
+            {props.onOpenSkills ? (
+              <SidebarDestination
+                active={props.skillsActive === true}
+                icon={Sparkles}
+                label={t("sidebar.skills")}
+                onSelect={props.onOpenSkills}
+              />
+            ) : null}
+            {props.onOpenConnectors ? (
+              <SidebarDestination
+                active={props.connectorsActive === true}
+                icon={PlugZap}
+                label={t("sidebar.connectors")}
+                onSelect={props.onOpenConnectors}
+              />
+            ) : null}
+            <SidebarDestination
+              active={props.extensionsActive === true}
+              icon={BookOpen}
+              label={t("sidebar.library")}
+              onSelect={props.onOpenExtensions}
+            />
             {props.onOpenAutomations ? (
               <SidebarDestination
                 active={props.automationsActive === true}
                 icon={Clock3}
-                label="Automations"
+                label={t("sidebar.automations")}
                 labelContent={(
                   <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <span className="truncate">Automations</span>
+                    <span className="truncate">{t("sidebar.automations")}</span>
                     {props.automationsNeedAttention ? (
                       <AlertTriangle
                         data-automations-attention-indicator
@@ -1184,15 +1251,22 @@ export function AppSidebar(props: AppSidebarProps) {
                 onSelect={props.onOpenAutomations}
               />
             ) : null}
-            <SidebarDestination
-              active={props.extensionsActive === true}
-              icon={LayoutGrid}
-              label={t("settings.tab_extensions")}
-              onSelect={props.onOpenExtensions}
-            />
-            <SidebarMenuItem>
-              <NotificationBell variant="sidebar-row" />
-            </SidebarMenuItem>
+            {props.onOpenProjects ? (
+              <SidebarDestination
+                active={props.projectsActive === true}
+                icon={FolderKanban}
+                label={t("sidebar.projects")}
+                onSelect={props.onOpenProjects}
+              />
+            ) : null}
+            {props.onOpenInspiration ? (
+              <SidebarDestination
+                active={props.inspirationActive === true}
+                icon={Lightbulb}
+                label={t("sidebar.inspiration")}
+                onSelect={props.onOpenInspiration}
+              />
+            ) : null}
           </SidebarMenu>
         </SidebarHeader>
         <SidebarSplitPill

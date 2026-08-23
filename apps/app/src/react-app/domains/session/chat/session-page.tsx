@@ -163,6 +163,24 @@ export type SessionPageSidebarProps = {
   automationsActive?: boolean;
   automationsNeedAttention?: boolean;
   onOpenAutomations?: () => void;
+  /** Opens the assistant chat home (the session route). */
+  assistantActive?: boolean;
+  onOpenAssistant?: () => void;
+  /** Opens the Experts module page. */
+  expertsActive?: boolean;
+  onOpenExperts?: () => void;
+  /** Opens the Library skills section. */
+  skillsActive?: boolean;
+  onOpenSkills?: () => void;
+  /** Opens the Library connections section. */
+  connectorsActive?: boolean;
+  onOpenConnectors?: () => void;
+  /** Opens the Projects module page. */
+  projectsActive?: boolean;
+  onOpenProjects?: () => void;
+  /** Opens the Inspiration module page. */
+  inspirationActive?: boolean;
+  onOpenInspiration?: () => void;
   /** Opens the cross-session message search dialog (Cmd/Ctrl+Shift+F). */
   onOpenSessionSearch?: () => void;
   onReorderWorkspaces?: (workspaceIds: string[]) => void;
@@ -1065,6 +1083,18 @@ export function SessionPage(props: SessionPageProps) {
           automationsActive={props.sidebar.automationsActive}
           automationsNeedAttention={props.sidebar.automationsNeedAttention}
           onOpenAutomations={props.sidebar.onOpenAutomations}
+          assistantActive={props.sidebar.assistantActive}
+          onOpenAssistant={props.sidebar.onOpenAssistant}
+          expertsActive={props.sidebar.expertsActive}
+          onOpenExperts={props.sidebar.onOpenExperts}
+          skillsActive={props.sidebar.skillsActive}
+          onOpenSkills={props.sidebar.onOpenSkills}
+          connectorsActive={props.sidebar.connectorsActive}
+          onOpenConnectors={props.sidebar.onOpenConnectors}
+          projectsActive={props.sidebar.projectsActive}
+          onOpenProjects={props.sidebar.onOpenProjects}
+          inspirationActive={props.sidebar.inspirationActive}
+          onOpenInspiration={props.sidebar.onOpenInspiration}
           conversationHistory={{
             canGoBack: canGoBackInConversationHistory,
             canGoForward: canGoForwardInConversationHistory,

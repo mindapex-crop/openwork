@@ -93,6 +93,8 @@ import { useLocal } from "@/react-app/kernel/local-provider";
 import { usePlatform } from "@/react-app/kernel/platform";
 import { SessionPage, type OpenSessionTab } from "@/react-app/domains/session/chat/session-page";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
+import { ModulePlaceholderPage } from "@/react-app/domains/session/sidebar/module-placeholder-page";
+import { FolderKanban, Lightbulb, Users } from "lucide-react";
 import { useAutomationDeploymentEnabled } from "@/react-app/domains/automations/automation-availability";
 import { automationsStateChangedEvent } from "@/react-app/domains/automations/automation-events";
 import type { NewTaskComposerContext } from "@/react-app/domains/session/chat/new-task-composer";
@@ -213,6 +215,9 @@ import {
   globalExtensionsRoute,
   legacySessionRoute,
   automationsRoute,
+  expertsRoute,
+  inspirationRoute,
+  projectsRoute,
   workspaceExtensionsRoute,
   workspaceSessionRoute,
   workspaceSettingsRoute,
@@ -486,6 +491,9 @@ export function SessionRoute() {
   const navigate = useNavigate();
   const location = useLocation();
   const automationsRouteRequested = /^\/automations(?:\/|$)/.test(location.pathname);
+  const expertsRouteRequested = /^\/experts(?:\/?$)/.test(location.pathname);
+  const projectsRouteRequested = /^\/projects(?:\/?$)/.test(location.pathname);
+  const inspirationRouteRequested = /^\/inspiration(?:\/?$)/.test(location.pathname);
   const platform = usePlatform();
   const denAuth = useDenAuth();
   const { config: shellConfig } = useShellConfig();
@@ -2692,6 +2700,12 @@ export function SessionRoute() {
       primaryTitle={automationsRouteActive ? "Automations" : undefined}
       primarySlot={automationsRouteActive ? (
         <AutomationsPage providerCatalog={providerCatalog} />
+      ) : expertsRouteRequested ? (
+        <ModulePlaceholderPage module="experts" icon={Users} />
+      ) : projectsRouteRequested ? (
+        <ModulePlaceholderPage module="projects" icon={FolderKanban} />
+      ) : inspirationRouteRequested ? (
+        <ModulePlaceholderPage module="inspiration" icon={Lightbulb} />
       ) : undefined}
       terminalOpen={terminalOpen}
       onTerminalOpenChange={setTerminalOpen}
@@ -2716,6 +2730,31 @@ export function SessionRoute() {
               navigate(automationsRoute());
             }
           : undefined,
+        assistantActive: !automationsRouteActive && !extensionsMainOpen
+          && !expertsRouteRequested && !projectsRouteRequested && !inspirationRouteRequested,
+        onOpenAssistant: () => {
+          navigate("/session");
+        },
+        expertsActive: expertsRouteRequested,
+        onOpenExperts: () => {
+          navigate(expertsRoute());
+        },
+        skillsActive: false,
+        onOpenSkills: () => {
+          handleOpenExtensions("skills");
+        },
+        connectorsActive: false,
+        onOpenConnectors: () => {
+          handleOpenExtensions("connections");
+        },
+        projectsActive: projectsRouteRequested,
+        onOpenProjects: () => {
+          navigate(projectsRoute());
+        },
+        inspirationActive: inspirationRouteRequested,
+        onOpenInspiration: () => {
+          navigate(inspirationRoute());
+        },
         onSelectWorkspace: async (workspaceId) => {
           if (workspaceId === selectedWorkspaceId) return true;
           setLegacySelectedWorkspaceId(workspaceId);

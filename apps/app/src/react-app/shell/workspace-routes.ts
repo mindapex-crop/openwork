@@ -19,6 +19,18 @@ export function automationsRoute() {
   return "/automations";
 }
 
+export function expertsRoute() {
+  return "/experts";
+}
+
+export function projectsRoute() {
+  return "/projects";
+}
+
+export function inspirationRoute() {
+  return "/inspiration";
+}
+
 export function globalSettingsRoute(tab: SettingsTab) {
   return `/settings/${tab}`;
 }

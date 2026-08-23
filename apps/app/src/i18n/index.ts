@@ -78,6 +78,25 @@ export const isLanguage = (value: unknown): value is Language => {
 
 let localeValue: Language = "en";
 
+const localeListeners = new Set<() => void>();
+
+/**
+ * Subscribe to locale changes so React components can re-render (and re-run
+ * `t()`) the moment `setLocale` runs, instead of waiting for a remount.
+ */
+export const subscribeLocale = (listener: () => void): (() => void) => {
+  localeListeners.add(listener);
+  return () => {
+    localeListeners.delete(listener);
+  };
+};
+
+const notifyLocaleListeners = () => {
+  for (const listener of localeListeners) {
+    listener();
+  }
+};
+
 /**
  * Get current locale
  */
@@ -95,6 +114,7 @@ export const setLocale = (newLocale: Language) => {
     newLocale = "en";
   }
 
+  const previousLocale = localeValue;
   localeValue = newLocale;
 
   if (typeof document !== "undefined") {
@@ -108,6 +128,10 @@ export const setLocale = (newLocale: Language) => {
     } catch (e) {
       console.warn("Failed to persist language preference:", e);
     }
+  }
+
+  if (previousLocale !== newLocale) {
+    notifyLocaleListeners();
   }
 };
 
