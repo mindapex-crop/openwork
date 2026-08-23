@@ -30,6 +30,7 @@ import {
   formatStatusLabel,
   formatStatusTone,
 } from "./im-connector-state";
+import { t } from "@/i18n";
 
 type ImConnectorPlatform = "feishu" | "wecom" | "dingtalk" | "slack" | "discord";
 
@@ -142,35 +143,35 @@ function ImConnectorCard(props: ImConnectorCardProps) {
           <div className="text-[11px] text-muted-foreground">
             {props.state.lastSyncAt ? (
               <>
-                最近同步：{props.state.lastSyncAt}
-                {props.state.botName ? <> · 机器人：{props.state.botName}</> : null}
+                {t("im_connectors.last_sync")}{props.state.lastSyncAt}
+                {props.state.botName ? <> · {t("im_connectors.bot")}{props.state.botName}</> : null}
               </>
             ) : props.state.status === "connected" ? (
-              "连接已就绪，可在 IM 中直接 @机器人发起任务。"
+              t("im_connectors.connected_ready")
             ) : (
-              "配置应用凭证后即可完成接入。"
+              t("im_connectors.configure_hint")
             )}
           </div>
           <div className="flex items-center gap-1.5">
             {props.state.status === "connected" ? (
               <>
-                <Button variant="ghost" size="icon-sm" title="重新同步" disabled={props.state.status !== "connected"}>
+                <Button variant="ghost" size="icon-sm"                  title={t("im_connectors.resync")} disabled={props.state.status !== "connected"}>
                   <RefreshCcw className="size-3.5" />
                 </Button>
                 <Button variant="ghost" size="sm" onClick={() => props.onDisconnect(props.definition.id)}>
                   <Power className="mr-1.5 size-3.5" />
-                  断开
+                  {t("im_connectors.disconnect")}
                 </Button>
               </>
             ) : props.state.status === "connecting" ? (
               <Button size="sm" disabled>
                 <RefreshCcw className="mr-1.5 size-3.5 animate-spin" />
-                授权中...
+                {t("im_connectors.authorizing")}
               </Button>
             ) : (
               <Button size="sm" onClick={() => props.onConnect(props.definition.id)}>
                 <Plus className="mr-1.5 size-3.5" />
-                连接
+                {t("im_connectors.connect")}
               </Button>
             )}
             {props.definition.documentationUrl ? (
@@ -178,7 +179,7 @@ function ImConnectorCard(props: ImConnectorCardProps) {
                 href={props.definition.documentationUrl}
                 target="_blank"
                 rel="noreferrer"
-                title="查看文档"
+                title={t("im_connectors.view_docs")}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-input bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
               >
                 <ExternalLink className="size-3.5" />
@@ -248,26 +249,26 @@ export function ImConnectorsSection() {
         <LayoutSectionHeader>
           <LayoutSectionTitle>
             <MessagesSquare className="size-4 text-primary" />
-            IM 集成
+            {t("im_connectors.title")}
             <Badge variant="secondary" className="ml-2 text-[10px]">
-              {summary.connected} / {summary.total} 已连接
+              {t("im_connectors.connected_count", { connected: summary.connected, total: summary.total })}
             </Badge>
           </LayoutSectionTitle>
           <LayoutSectionDescription>
-            将 OpenWork Agent 接入消息平台，让团队成员可以在日常聊天里与 Agent 对话，将任务、产物、审批直接推送到你所在的频道与工作群。
+            {t("im_connectors.description")}
           </LayoutSectionDescription>
         </LayoutSectionHeader>
         <LayoutSectionContent>
           <LayoutSectionItem>
             <LayoutSectionItemHeader>
-              <LayoutSectionItemTitle>可用的平台</LayoutSectionItemTitle>
+              <LayoutSectionItemTitle>{t("im_connectors.available_platforms")}</LayoutSectionItemTitle>
               <Button variant="outline" size="sm" className="gap-1.5" disabled>
                 <Plus className="size-3.5" />
-                自定义 Webhook (即将支持)
+                {t("im_connectors.custom_webhook")}
               </Button>
             </LayoutSectionItemHeader>
             <LayoutSectionItemDescription>
-              点击下方“连接”按钮跳转到对应平台的授权页面，完成后即可在 OpenWork 中查看状态并管理连接。
+              {t("im_connectors.connect_hint")}
             </LayoutSectionItemDescription>
             <div className="grid gap-3 md:grid-cols-1 xl:grid-cols-2">
               {states.map((state) => {

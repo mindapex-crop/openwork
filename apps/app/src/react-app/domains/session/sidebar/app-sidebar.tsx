@@ -1162,7 +1162,7 @@ export function AppSidebar(props: AppSidebarProps) {
               <SidebarDestination
                 active={props.automationsActive === true}
                 icon={Clock3}
-                label="Automations"
+                label={t("sidebar.automations")}
                 labelContent={(
                   <span className="flex min-w-0 flex-1 items-center gap-2">
                     <span className="truncate">Automations</span>
@@ -1182,7 +1182,7 @@ export function AppSidebar(props: AppSidebarProps) {
               <SidebarDestination
                 active={props.projectsActive === true}
                 icon={FolderKanban}
-                label="Projects"
+                label={t("sidebar.projects")}
                 onSelect={props.onOpenProjects}
               />
             ) : null}
@@ -1190,7 +1190,7 @@ export function AppSidebar(props: AppSidebarProps) {
               <SidebarDestination
                 active={props.skillsActive === true}
                 icon={Sparkles}
-                label="Skills"
+                label={t("sidebar.skills")}
                 onSelect={props.onOpenSkills}
               />
             ) : null}
@@ -1198,7 +1198,7 @@ export function AppSidebar(props: AppSidebarProps) {
               <SidebarDestination
                 active={props.collabActive === true}
                 icon={Users}
-                label="协作"
+                label={t("sidebar.collab")}
                 onSelect={props.onOpenCollab}
               />
             ) : null}
@@ -1206,7 +1206,7 @@ export function AppSidebar(props: AppSidebarProps) {
               <SidebarDestination
                 active={props.marketplaceActive === true || false}
                 icon={Store}
-                label="Marketplace"
+                label={t("sidebar.marketplace")}
                 onSelect={props.onOpenMarketplace}
               />
             ) : null}
@@ -1214,7 +1214,7 @@ export function AppSidebar(props: AppSidebarProps) {
               <SidebarDestination
                 active={props.knowledgeActive === true}
                 icon={BookOpen}
-                label="Knowledge"
+                label={t("sidebar.knowledge")}
                 onSelect={props.onOpenKnowledge}
               />
             ) : null}

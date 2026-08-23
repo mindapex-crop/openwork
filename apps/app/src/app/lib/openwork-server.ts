@@ -1340,12 +1340,26 @@ async function requestJson<T>(
   );
 
   const text = await response.text();
-  const json = text ? JSON.parse(text) : null;
+
+  let json: unknown = null;
+  if (text) {
+    try {
+      json = JSON.parse(text);
+    } catch {
+      // Non-JSON body (e.g. an HTML error page or proxy response). Keep the
+      // raw text so the thrown error carries a useful message instead of a
+      // confusing "Unexpected token '<'" SyntaxError.
+      json = null;
+    }
+  }
 
   if (!response.ok) {
-    const code = typeof json?.code === "string" ? json.code : "request_failed";
-    const message = typeof json?.message === "string" ? json.message : response.statusText;
-    throw new OpenworkServerError(response.status, code, message, json?.details);
+    const errorBody = json as { code?: unknown; message?: unknown; details?: unknown } | null;
+    const code = typeof errorBody?.code === "string" ? errorBody.code : "request_failed";
+    const message = typeof errorBody?.message === "string"
+      ? errorBody.message
+      : response.statusText || (text ? text.slice(0, 200) : "Empty response");
+    throw new OpenworkServerError(response.status, code, message, errorBody?.details);
   }
 
   return json as T;

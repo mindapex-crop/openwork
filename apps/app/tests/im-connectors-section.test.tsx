@@ -18,12 +18,12 @@ import { ImConnectorsSection } from "../src/react-app/domains/settings/im-connec
 describe("ImConnectorsSection", () => {
   const html = renderToStaticMarkup(<ImConnectorsSection />);
 
-  test("renders the section title 'IM 集成'", () => {
-    expect(html).toContain("IM 集成");
+  test("renders the section title 'IM Integration'", () => {
+    expect(html).toContain("IM Integration");
   });
 
   test("renders summary badge showing 0/5 connected initially", () => {
-    expect(html).toContain("0 / 5 已连接");
+    expect(html).toContain("0 / 5 connected");
   });
 
   test("renders all 5 platform names", () => {
@@ -42,15 +42,14 @@ describe("ImConnectorsSection", () => {
     expect(html).toContain("Discord Bot 集成");
   });
 
-  test("all platforms show '未连接' status initially", () => {
-    const matches = html.match(/未连接/g);
+  test("all platforms show 'Disconnected' status initially", () => {
+    const matches = html.match(/Disconnected/gi);
     expect(matches).not.toBeNull();
     expect(matches!.length).toBe(5);
   });
 
-  test("each disconnected platform shows '连接' button", () => {
-    // 每个平台的连接按钮
-    const connectMatches = html.match(/>连接</g);
+  test("each disconnected platform shows 'Connect' button", () => {
+    const connectMatches = html.match(/>Connect</g);
     expect(connectMatches).not.toBeNull();
     expect(connectMatches!.length).toBe(5);
   });
@@ -69,13 +68,13 @@ describe("ImConnectorsSection", () => {
   });
 
   test("custom webhook button is disabled (coming soon)", () => {
-    expect(html).toContain("自定义 Webhook");
+    expect(html).toContain("Custom Webhook");
     expect(html).toContain("disabled");
   });
 
   test("description text explains the feature", () => {
-    expect(html).toContain("将 OpenWork Agent 接入消息平台");
-    expect(html).toContain("配置应用凭证后即可完成接入");
+    expect(html).toContain("Connect OpenWork Agent to messaging platforms");
+    expect(html).toContain("Complete the setup after configuring app credentials");
   });
 
   test("each platform card has an icon container with accent color", () => {

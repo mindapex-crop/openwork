@@ -126,6 +126,11 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
       .replace(/^\/+|\/+$/g, "")
     : "";
   const workspaceInferenceSessionId = sessionIdForLegacyWorkspaceInference(routeWorkspaceId, selectedSessionId);
+  // Workspace-agnostic standalone routes (no :workspaceId segment) must never
+  // be normalized onto the selected workspace's session route. The session
+  // route hosts them via `primarySlot`; a normalize here would yank the user
+  // back to /workspace/:id/session right after they click Projects/Skills/etc.
+  const standaloneRouteActive = /^\/(?:projects|skills|knowledge|marketplace|collab-hub)(?:\/|$)/.test(location.pathname);
   const navigateToWorkspaceSession = useCallback((workspaceId: string, sessionId?: string | null, options?: { replace?: boolean }) => {
     const id = workspaceId.trim();
     if (!id) {
@@ -135,6 +140,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
     navigate(workspaceSessionRoute(id, sessionId), options);
   }, [navigate]);
   const normalizeWorkspaceRoute = useCallback((workspaceId: string, sessionId?: string | null, options?: { replace?: boolean }) => {
+    if (standaloneRouteActive) return;
     if (extensionsRouteActive) {
       navigate(workspaceExtensionsRoute(workspaceId, extensionsRoutePath), options);
       return;
@@ -145,7 +151,7 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
       return;
     }
     navigateToWorkspaceSession(workspaceId, sessionId, options);
-  }, [extensionsRouteActive, extensionsRoutePath, location.pathname, navigate, navigateToWorkspaceSession, workspaceRoute]);
+  }, [extensionsRouteActive, extensionsRoutePath, location.pathname, navigate, navigateToWorkspaceSession, standaloneRouteActive, workspaceRoute]);
 
   const {
     markRouteReady: markBootRouteReady,

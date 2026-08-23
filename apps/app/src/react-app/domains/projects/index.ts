@@ -3,18 +3,21 @@ export { ProjectDetailPanel } from "./project-detail-panel";
 export {
   PERSISTED_PROJECTS_KEY,
   PROJECT_WORK_COLUMNS,
+  STORE_VERSION,
   useProject,
+  useProjectPlans,
   useProjectStore,
   useProjects,
 } from "./project-store";
 export type {
   Evidence,
   EvidenceStatus,
-  Milestone,
-  MilestoneStatus,
+  Plan,
+  PlanStatus,
   Project,
   ProjectStatus,
   ProjectStore,
-  Work,
-  WorkStatus,
+  Subtask,
+  Task,
+  TaskStatus,
 } from "./project-store";

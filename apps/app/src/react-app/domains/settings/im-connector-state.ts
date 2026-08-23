@@ -75,12 +75,14 @@ export function connectedCount(states: ImConnectorState[]): number {
   return states.filter((s) => s.status === "connected").length;
 }
 
+import { t } from "@/i18n";
+
 /** Human-readable status label. */
 export function formatStatusLabel(status: ImConnectorStatus): string {
   switch (status) {
-    case "connected": return "已连接";
-    case "connecting": return "连接中";
-    case "disconnected": return "未连接";
+    case "connected": return t("im_connectors.status_connected");
+    case "connecting": return t("im_connectors.status_connecting");
+    case "disconnected": return t("im_connectors.status_disconnected");
   }
 }
 

@@ -16,6 +16,7 @@ import {
   useOpenWorkModelsPromoEligibility,
 } from "@/react-app/domains/cloud/openwork-models-promo";
 import { usePlatform } from "@/react-app/kernel/platform";
+import { t } from "@/i18n";
 import { NewTaskComposer, type NewTaskComposerContext, type TaskMode } from "./new-task-composer";
 
 type HeroSuggestion = {
@@ -91,20 +92,20 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
     () => [
       {
         value: "ask",
-        label: "Ask",
-        description: "Quick answers and explanations.",
+        label: t("task_mode.ask"),
+        description: t("task_mode.ask_desc"),
         icon: MessageSquare,
       },
       {
         value: "craft",
-        label: "Craft",
-        description: "Build or change things end-to-end.",
+        label: t("task_mode.craft"),
+        description: t("task_mode.craft_desc"),
         icon: Sparkles,
       },
       {
         value: "plan",
-        label: "Plan",
-        description: "Draft a plan before running anything.",
+        label: t("task_mode.plan"),
+        description: t("task_mode.plan_desc"),
         icon: Lightbulb,
       },
     ],
