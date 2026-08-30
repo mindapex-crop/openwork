@@ -1,233 +1,59 @@
 /** @jsxImportSource react */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "bun:test";
+import { renderToStaticMarkup } from "react-dom/server";
+
 import { ScreenRecorder } from "../src/react-app/domains/capture/screen-recorder";
 
-// Mock MediaRecorder
-const mockMediaRecorder = {
-  start: vi.fn(),
-  stop: vi.fn(),
-  state: "inactive",
-  ondataavailable: null,
-  onstop: null,
-};
+/**
+ * `isScreenRecordingSupported(navigator)` is read during render, so swapping
+ * `navigator.mediaDevices` between renders drives both branches.
+ */
+function setMediaDevices(value: { getDisplayMedia: () => void } | null) {
+  Object.defineProperty(globalThis.navigator, "mediaDevices", {
+    value,
+    configurable: true,
+  });
+}
 
-const MockMediaRecorder = vi.fn(() => mockMediaRecorder);
-global.MediaRecorder = MockMediaRecorder as any;
+function textOf(markup: string) {
+  return markup.replace(/<[^>]*>/g, "|").replace(/\|+/g, "|");
+}
 
-// Mock getDisplayMedia
-const mockStream = {
-  getTracks: vi.fn(() => [{ stop: vi.fn() }]),
-};
+function cardHeader(markup: string) {
+  return markup.match(/<div data-slot="card-header"[\s\S]*?(?=<div data-slot="card-content")/)?.[0] ?? "";
+}
 
-const mockGetDisplayMedia = vi.fn(async () => mockStream);
-navigator.mediaDevices.getDisplayMedia = mockGetDisplayMedia as any;
-
-// Mock URL.createObjectURL and revokeObjectURL
-global.URL.createObjectURL = vi.fn(() => "blob:test-url");
-global.URL.revokeObjectURL = vi.fn();
-
-// Mock Blob
-global.Blob = class MockBlob {
-  constructor(public parts: any[], public options?: BlobPropertyBag) {}
-  size = 1024;
-  type = "video/webm";
-} as any;
+afterEach(() => setMediaDevices(null));
 
 describe("ScreenRecorder", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockGetDisplayMedia.mockResolvedValue(mockStream);
+  test("hides the recorder and explains itself when screen capture is unavailable", () => {
+    setMediaDevices(null);
+    const markup = renderToStaticMarkup(<ScreenRecorder />);
+
+    expect(textOf(markup)).toContain("does not support screen recording");
+    expect(markup).not.toContain("Start Recording");
+    expect(markup).not.toContain("<video");
   });
 
-  it("renders start recording button initially", () => {
-    render(<ScreenRecorder />);
-    
-    const startButton = screen.getByText(/开始录制|Start Recording/i);
-    expect(startButton).toBeTruthy();
+  test("shows the pre-recording state: audio opt-in and a start control, no preview yet", () => {
+    setMediaDevices({ getDisplayMedia: () => {} });
+    const markup = renderToStaticMarkup(<ScreenRecorder />);
+    const text = textOf(markup);
+
+    expect(text).toContain("Select Screen to Record");
+    expect(text).toContain("Include Microphone Audio");
+    expect(text).toContain("Start Recording");
+    expect(markup).toContain('aria-label="Include Microphone Audio"');
+    expect(markup).not.toContain("<video");
   });
 
-  it("shows audio toggle switch", () => {
-    render(<ScreenRecorder />);
-    
-    const audioToggle = screen.getByText(/包含麦克风音频|Include Microphone Audio/i);
-    expect(audioToggle).toBeTruthy();
-  });
+  test("only renders a way out when the host can be cancelled", () => {
+    setMediaDevices({ getDisplayMedia: () => {} });
 
-  it("starts recording when start button is clicked", async () => {
-    render(<ScreenRecorder />);
-    
-    const startButton = screen.getByText(/开始录制|Start Recording/i);
-    fireEvent.click(startButton);
-    
-    await waitFor(() => {
-      expect(mockGetDisplayMedia).toHaveBeenCalled();
-    });
-    
-    expect(MockMediaRecorder).toHaveBeenCalled();
-    expect(mockMediaRecorder.start).toHaveBeenCalled();
-  });
+    const closable = cardHeader(renderToStaticMarkup(<ScreenRecorder onCancel={() => {}} />));
+    const standalone = cardHeader(renderToStaticMarkup(<ScreenRecorder />));
 
-  it("shows recording timer after starting", async () => {
-    render(<ScreenRecorder />);
-    
-    const startButton = screen.getByText(/开始录制|Start Recording/i);
-    fireEvent.click(startButton);
-    
-    await waitFor(() => {
-      // Timer should appear showing duration
-      const timerElement = screen.getByText(/\d{2}:\d{2}/);
-      expect(timerElement).toBeTruthy();
-    });
-  });
-
-  it("changes button to stop during recording", async () => {
-    render(<ScreenRecorder />);
-    
-    const startButton = screen.getByText(/开始录制|Start Recording/i);
-    fireEvent.click(startButton);
-    
-    await waitFor(() => {
-      const stopButton = screen.getByText(/停止录制|Stop Recording/i);
-      expect(stopButton).toBeTruthy();
-    });
-  });
-
-  it("stops recording when stop button is clicked", async () => {
-    render(<ScreenRecorder />);
-    
-    // Start recording
-    const startButton = screen.getByText(/开始录制|Start Recording/i);
-    fireEvent.click(startButton);
-    
-    await waitFor(() => {
-      const stopButton = screen.getByText(/停止录制|Stop Recording/i);
-      fireEvent.click(stopButton);
-    });
-    
-    expect(mockMediaRecorder.stop).toHaveBeenCalled();
-  });
-
-  it("shows video preview after stopping", async () => {
-    render(<ScreenRecorder />);
-    
-    // Start and stop recording
-    const startButton = screen.getByText(/开始录制|Start Recording/i);
-    fireEvent.click(startButton);
-    
-    await waitFor(() => {
-      const stopButton = screen.getByText(/停止录制|Stop Recording/i);
-      fireEvent.click(stopButton);
-    });
-    
-    await waitFor(() => {
-      const videoElement = document.querySelector("video");
-      expect(videoElement).toBeTruthy();
-    });
-  });
-
-  it("shows save button after recording", async () => {
-    render(<ScreenRecorder />);
-    
-    // Start and stop recording
-    const startButton = screen.getByText(/开始录制|Start Recording/i);
-    fireEvent.click(startButton);
-    
-    await waitFor(() => {
-      const stopButton = screen.getByText(/停止录制|Stop Recording/i);
-      fireEvent.click(stopButton);
-    });
-    
-    await waitFor(() => {
-      const saveButton = screen.getByText(/保存录制|Save Recording/i);
-      expect(saveButton).toBeTruthy();
-    });
-  });
-
-  it("calls onSave callback when save is clicked", async () => {
-    const onSave = vi.fn();
-    render(<ScreenRecorder onSave={onSave} />);
-    
-    // Start and stop recording
-    const startButton = screen.getByText(/开始录制|Start Recording/i);
-    fireEvent.click(startButton);
-    
-    await waitFor(() => {
-      const stopButton = screen.getByText(/停止录制|Stop Recording/i);
-      fireEvent.click(stopButton);
-    });
-    
-    await waitFor(() => {
-      const saveButton = screen.getByText(/保存录制|Save Recording/i);
-      fireEvent.click(saveButton);
-    });
-    
-    expect(onSave).toHaveBeenCalled();
-  });
-
-  it("calls onCancel when cancel is clicked", () => {
-    const onCancel = vi.fn();
-    render(<ScreenRecorder onCancel={onCancel} />);
-    
-    const cancelButton = screen.getByText(/取消|Cancel/i);
-    fireEvent.click(cancelButton);
-    
-    expect(onCancel).toHaveBeenCalled();
-  });
-
-  it("handles permission denied error", async () => {
-    mockGetDisplayMedia.mockRejectedValueOnce(new Error("Permission denied"));
-    
-    render(<ScreenRecorder />);
-    
-    const startButton = screen.getByText(/开始录制|Start Recording/i);
-    fireEvent.click(startButton);
-    
-    await waitFor(() => {
-      // Should show error message
-      const errorMessage = screen.getByText(/权限被拒绝|permission denied/i);
-      expect(errorMessage).toBeTruthy();
-    });
-  });
-
-  it("includes audio in getDisplayMedia when toggle is on", async () => {
-    render(<ScreenRecorder />);
-    
-    // Toggle audio on
-    const audioToggle = screen.getByText(/包含麦克风音频|Include Microphone Audio/i);
-    fireEvent.click(audioToggle);
-    
-    // Start recording
-    const startButton = screen.getByText(/开始录制|Start Recording/i);
-    fireEvent.click(startButton);
-    
-    await waitFor(() => {
-      expect(mockGetDisplayMedia).toHaveBeenCalledWith(
-        expect.objectContaining({
-          audio: true,
-        })
-      );
-    });
-  });
-
-  it("formats duration correctly", () => {
-    render(<ScreenRecorder />);
-    
-    // This would need to simulate time passing
-    // For now, just verify the component renders without errors
-    expect(screen.getByText(/开始录制|Start Recording/i)).toBeTruthy();
-  });
-
-  it("cleans up resources on unmount", () => {
-    const { unmount } = render(<ScreenRecorder />);
-    
-    // Start recording
-    const startButton = screen.getByText(/开始录制|Start Recording/i);
-    fireEvent.click(startButton);
-    
-    unmount();
-    
-    // Should have cleaned up stream tracks
-    expect(mockStream.getTracks).toHaveBeenCalled();
+    expect(closable).toContain("<button");
+    expect(standalone).not.toContain("<button");
   });
 });

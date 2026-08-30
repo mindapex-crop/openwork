@@ -34,8 +34,12 @@ function clickByText(text: string) {
   })()`;
 }
 
-function textPresent(haystack: string, needle: string) {
-  return `${haystack}.some((label) => label.includes(${JSON.stringify(needle)}))`;
+function readStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function readText(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function buttonLabels(): string {
@@ -68,7 +72,7 @@ test.skipIf(!appSpecsEnabled)(title, async ({ evidence }) => {
     ]);
     expect(seen.ok, seen.why).toBe(true);
   }
-  const labels = await listLabels;
+  const labels = readStringList(await listLabels);
   expect(labels.some((l) => l.includes("新建项目")), `list buttons: ${labels.join(",")}`).toBe(true);
   expect(labels.some((l) => l.includes("我加入的"))).toBe(true);
   expect(labels.some((l) => l.includes("全部"))).toBe(true);
@@ -93,7 +97,7 @@ test.skipIf(!appSpecsEnabled)(title, async ({ evidence }) => {
     ]);
     expect(seen.ok, seen.why).toBe(true);
   }
-  const dialogText = await evalIn(app, `(document.querySelector('[role="dialog"]')?.innerText ?? "")`);
+  const dialogText = readText(await evalIn(app, `(document.querySelector('[role="dialog"]')?.innerText ?? "")`));
   expect(dialogText.includes("软件开发"), `dialog text: ${dialogText.slice(0, 200)}`).toBe(true);
   evidence.fact(
     "New-project dialog shows a name field, template chips, and create/cancel actions",
@@ -126,7 +130,7 @@ test.skipIf(!appSpecsEnabled)(title, async ({ evidence }) => {
     label: "detail three columns",
   });
 
-  const detailText = await evalIn(app, `document.body.innerText`);
+  const detailText = readText(await evalIn(app, `document.body.innerText`));
   expect(detailText.includes("智能体")).toBe(true);
   expect(detailText.includes("工作空间")).toBe(true);
   expect(detailText.includes("任务")).toBe(true);
