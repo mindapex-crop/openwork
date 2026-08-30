@@ -1,7 +1,10 @@
 /**
  * teams 路由测试 - 覆盖 /teams/run-simple 一键协作接口
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, beforeAll } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ApprovalService } from "../approvals.js";
 import type { ReloadEventStore } from "../events.js";
 import type { TokenService } from "../tokens.js";
@@ -12,6 +15,13 @@ import {
   registerTeamRoutes,
   type RunSimpleExecutor,
 } from "./teams.js";
+
+let teamStorePath: string;
+
+beforeAll(async () => {
+  // 团队持久化 sqlite 路径（隔离测试数据，避免写入真实配置目录）
+  teamStorePath = join(await mkdtemp(join(tmpdir(), "teams-route-test-")), "teams.sqlite");
+});
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -33,6 +43,7 @@ function buildRoutes(opts?: {
     routes,
     jsonResponse,
     readJsonBody,
+    teamStorePath,
     detectAgents: opts?.detectAgents,
     executePlan: opts?.executePlan,
   });

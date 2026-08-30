@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
@@ -11,8 +11,13 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { markdownLivePreview } from "./markdown-live-preview";
+import { RichTextEditor, htmlToMarkdown, markdownToHtml } from "../../editor/rich-text-editor";
+import { isMeetingTranscript } from "../../meeting/transcription-parser";
+import { NotesExtractor } from "../../meeting/notes-extractor";
 
 const LINE_PREFIX_PATTERN = /^(#{1,6}\s+|>\s+|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/;
 
@@ -57,7 +62,42 @@ export function ArtifactTextEditor(props: ArtifactTextEditorProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(props.onChange);
+  const [showMeetingNotes, setShowMeetingNotes] = useState(false);
+  const isTranscript = isMeetingTranscript(props.value);
 
+  // For markdown language, use RichTextEditor
+  if (props.language === "markdown") {
+    return (
+      <div className="relative h-full">
+        <RichTextEditor
+          value={props.value}
+          onChange={(html) => {
+            // Convert HTML back to markdown for storage
+            const markdown = htmlToMarkdown(html);
+            props.onChange(markdown);
+          }}
+          className={cn("h-full min-h-0 overflow-hidden", props.className)}
+        />
+        {isTranscript && (
+          <div className="absolute top-2 right-2 z-10">
+            <Button variant="outline" size="sm" onClick={() => setShowMeetingNotes(true)}>
+              Extract Meeting Notes
+            </Button>
+            <Dialog open={showMeetingNotes} onOpenChange={setShowMeetingNotes}>
+              <DialogContent className="max-w-3xl max-h-[80vh]">
+                <DialogHeader>
+                  <DialogTitle>Meeting Notes</DialogTitle>
+                </DialogHeader>
+                <NotesExtractor transcript={props.value} />
+              </DialogContent>
+            </Dialog>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // For text language, use CodeMirror editor
   useEffect(() => {
     onChangeRef.current = props.onChange;
   }, [props.onChange]);
@@ -74,34 +114,24 @@ export function ArtifactTextEditor(props: ArtifactTextEditorProps) {
       state: EditorState.create({
         doc: props.value,
         extensions: [
-          props.language === "markdown" ? [] : lineNumbers(),
+          lineNumbers(),
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
-          // GFM base so tables, strikethrough and task lists parse; the
-          // CommonMark default never produces Table nodes to render.
-          props.language === "markdown" ? [markdown({ base: markdownLanguage }), markdownLivePreview()] : [],
           EditorView.lineWrapping,
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               onChangeRef.current(update.state.doc.toString());
             }
           }),
-          props.language === "markdown"
-            ? EditorView.theme({
-                "&": { height: "100%", background: "transparent" },
-                ".cm-scroller": { fontFamily: "inherit" },
-                ".cm-content": { minHeight: "100%", padding: "16px", maxWidth: "768px", margin: "0 auto", fontSize: "14px", lineHeight: "1.7" },
-                ".cm-activeLine": { backgroundColor: "transparent" },
-              })
-            : EditorView.theme({
-                "&": { height: "100%", background: "transparent" },
-                ".cm-scroller": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" },
-                ".cm-content": { minHeight: "100%", padding: "12px 0", fontSize: "12px", lineHeight: "20px" },
-                ".cm-gutters": { background: "transparent", borderRight: "1px solid hsl(var(--border))" },
-                ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px", color: "hsl(var(--muted-foreground))" },
-                ".cm-activeLine": { backgroundColor: "hsl(var(--muted) / 0.35)" },
-                ".cm-activeLineGutter": { backgroundColor: "hsl(var(--muted) / 0.35)" },
-              }),
+          EditorView.theme({
+            "&": { height: "100%", background: "transparent" },
+            ".cm-scroller": { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" },
+            ".cm-content": { minHeight: "100%", padding: "12px 0", fontSize: "12px", lineHeight: "20px" },
+            ".cm-gutters": { background: "transparent", borderRight: "1px solid hsl(var(--border))" },
+            ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px", color: "hsl(var(--muted-foreground))" },
+            ".cm-activeLine": { backgroundColor: "hsl(var(--muted) / 0.35)" },
+            ".cm-activeLineGutter": { backgroundColor: "hsl(var(--muted) / 0.35)" },
+          }),
         ],
       }),
     });
@@ -120,7 +150,7 @@ export function ArtifactTextEditor(props: ArtifactTextEditorProps) {
         delete (window as unknown as { __artifactEditorView?: EditorView }).__artifactEditorView;
       }
     };
-  }, [props.language]);
+  }, []);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -140,36 +170,5 @@ export function ArtifactTextEditor(props: ArtifactTextEditorProps) {
 
   const editor = <div ref={rootRef} className={cn("h-full min-h-0 overflow-hidden", props.className)} />;
 
-  if (props.language !== "markdown") {
-    return editor;
-  }
-
-  const format = (apply: (view: EditorView) => void) => {
-    const view = viewRef.current;
-
-    if (view) {
-      apply(view);
-    }
-  };
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger className="block h-full min-h-0">{editor}</ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onClick={() => format((view) => setLinePrefix(view, "# "))}>Heading 1</ContextMenuItem>
-        <ContextMenuItem onClick={() => format((view) => setLinePrefix(view, "## "))}>Heading 2</ContextMenuItem>
-        <ContextMenuItem onClick={() => format((view) => setLinePrefix(view, "### "))}>Heading 3</ContextMenuItem>
-        <ContextMenuItem onClick={() => format((view) => setLinePrefix(view, ""))}>Paragraph</ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => format((view) => wrapSelection(view, "**"))}>Bold</ContextMenuItem>
-        <ContextMenuItem onClick={() => format((view) => wrapSelection(view, "*"))}>Italic</ContextMenuItem>
-        <ContextMenuItem onClick={() => format((view) => wrapSelection(view, "~~"))}>Strikethrough</ContextMenuItem>
-        <ContextMenuItem onClick={() => format((view) => wrapSelection(view, "`"))}>Inline code</ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => format((view) => setLinePrefix(view, "- "))}>Bullet list</ContextMenuItem>
-        <ContextMenuItem onClick={() => format((view) => setLinePrefix(view, (index) => `${index + 1}. `))}>Numbered list</ContextMenuItem>
-        <ContextMenuItem onClick={() => format((view) => setLinePrefix(view, "> "))}>Quote</ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  );
+  return editor;
 }

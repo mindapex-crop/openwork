@@ -1,0 +1,29 @@
+{
+  "id": "expert-orchestration.capability-match-001",
+  "domain": "expert-orchestration",
+  "title": "Capability-match dispatch selects the only member whose capabilities cover the required set",
+  "input": {
+    "dispatchPolicy": {
+      "kind": "capability-match",
+      "required": { "streaming": true, "permissions": true }
+    },
+    "members": [
+      { "agentId": "coder", "capabilities": { "streaming": true, "permissions": false } },
+      { "agentId": "writer", "capabilities": { "streaming": true, "permissions": true } }
+    ]
+  },
+  "grading": {
+    "mode": "deterministic",
+    "expected": {
+      "type": "exact",
+      "value": {
+        "policyKind": "capability-match",
+        "selectedAgentId": "writer",
+        "eligibleAgents": ["writer"]
+      }
+    }
+  },
+  "metadata": {
+    "notes": "Golden input is a plain expert-config JSON; the runner exercises the real selectMember/filterMembersByCapabilities product functions. Capability fields are booleans per SidecarCapabilities."
+  }
+}

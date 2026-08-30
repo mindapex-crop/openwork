@@ -42,7 +42,11 @@ describe("serve", () => {
     const onUncaughtException = (error: unknown) => {
       uncaught.push(error);
     };
-    process.on("uncaughtException", onUncaughtException);
+    // Route through the EventEmitter base: bun-types shadows NodeJS.Process.off
+    // with a "memoryPressure"-only overload, so `process.off("uncaughtException")`
+    // does not typecheck even though `process.on` does.
+    const proc: EventEmitter = process;
+    proc.on("uncaughtException", onUncaughtException);
 
     const encoder = new TextEncoder();
     const server = await serve({
@@ -80,7 +84,7 @@ describe("serve", () => {
       expect(health.status).toBe(200);
       expect(await health.json()).toEqual({ ok: true });
     } finally {
-      process.off("uncaughtException", onUncaughtException);
+      proc.off("uncaughtException", onUncaughtException);
       await server.stop();
     }
   });

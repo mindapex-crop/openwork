@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import en from "./locales/en";
 import ja from "./locales/ja";
 import zh from "./locales/zh";
@@ -9,6 +10,33 @@ import ca from "./locales/ca";
 import es from "./locales/es";
 import ru from "./locales/ru";
 export const LANGUAGE_PREF_KEY = "openwork.language";
+
+/**
+ * Reactive locale subscription: `setLocale` bumps a version counter and
+ * notifies listeners so mounted components re-render with the new language.
+ * `useI18nVersion` (useSyncExternalStore) is the React side of this — the
+ * root component subscribes once and the whole mounted tree re-renders.
+ */
+let localeVersion = 0;
+const localeListeners = new Set<() => void>();
+
+export const subscribeLocale = (listener: () => void): (() => void) => {
+  localeListeners.add(listener);
+  return () => {
+    localeListeners.delete(listener);
+  };
+};
+
+export const getLocaleVersion = (): number => localeVersion;
+
+const notifyLocaleChanged = () => {
+  localeVersion += 1;
+  for (const listener of localeListeners) listener();
+};
+
+/** React hook: re-renders the calling component whenever the locale changes. */
+export const useI18nVersion = (): number =>
+  useSyncExternalStore(subscribeLocale, getLocaleVersion, getLocaleVersion);
 
 /**
  * Supported languages
@@ -100,6 +128,9 @@ export const setLocale = (newLocale: Language) => {
   if (typeof document !== "undefined") {
     document.documentElement.setAttribute("lang", newLocale);
   }
+
+  // Notify subscribers (React tree) so mounted components re-render.
+  notifyLocaleChanged();
 
   // Persist to localStorage
   if (typeof window !== "undefined") {
@@ -211,6 +242,24 @@ export const initLocale = (): Language => {
     }
   } catch (e) {
     console.warn("Failed to read language preference:", e);
+  }
+
+  // WorkBuddy 对标：未显式选择语言时跟随系统语言，中文系统默认简体中文。
+  const systemLanguage = (typeof navigator !== "undefined" ? navigator.language : "") || "";
+  const normalized = systemLanguage.toLowerCase().replace("_", "-");
+  if (normalized.startsWith("zh")) {
+    localeValue = "zh";
+    if (typeof document !== "undefined") {
+      document.documentElement.setAttribute("lang", "zh");
+    }
+    return "zh";
+  }
+  if (isLanguage(normalized)) {
+    localeValue = normalized as Language;
+    if (typeof document !== "undefined") {
+      document.documentElement.setAttribute("lang", normalized);
+    }
+    return normalized as Language;
   }
 
   if (typeof document !== "undefined") {

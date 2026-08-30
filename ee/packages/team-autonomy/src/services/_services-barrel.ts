@@ -35,3 +35,4 @@ export * from "../../../../apps/den-api/src/team-autonomy/task-service.js";
 export * from "../../../../apps/den-api/src/team-autonomy/team-agent-service.js";
 export * from "./personal-team-ensure.js";
 export * from "../../../../apps/den-api/src/team-autonomy/scheduler-worker.js";
+export * from "./agent-team/index.js";

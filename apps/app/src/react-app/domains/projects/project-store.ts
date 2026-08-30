@@ -18,6 +18,14 @@ export type ProjectStatus = "active" | "paused" | "done";
 export type TaskStatus = "todo" | "in_progress" | "review" | "done";
 export type EvidenceStatus = "pending" | "passed" | "failed";
 export type PlanStatus = "open" | "active" | "done";
+export type ActivityCategory = "all" | "mine" | "member" | "automation";
+
+export type ProjectActivityEvent = {
+  id: string;
+  text: string;
+  category: ActivityCategory;
+  createdAt: string;
+};
 
 export type Evidence = {
   status: EvidenceStatus;
@@ -43,6 +51,30 @@ export type Task = {
   /** WorkBuddy agent collaboration — the agent/role assigned to this task. */
   assignee?: string;
   createdAt: string;
+  /** G6 task transfer — packaged deliverables (files, artifacts). */
+  deliverables?: TaskDeliverable[];
+  /** G6 task transfer — progress summary for handoff. */
+  progressSummary?: string;
+  /** G6 task transfer — custom fields for flexible metadata. */
+  customFields?: Record<string, string>;
+};
+
+export type TaskDeliverable = {
+  name: string;
+  path: string;
+  type: "file" | "artifact" | "link";
+  createdAt: string;
+};
+
+export type TaskTransferPackage = {
+  taskId: string;
+  title: string;
+  status: TaskStatus;
+  deliverables: TaskDeliverable[];
+  progressSummary: string;
+  customFields: Record<string, string>;
+  subtaskSummary: { total: number; done: number };
+  packagedAt: string;
 };
 
 export type Plan = {
@@ -60,12 +92,24 @@ export type Project = {
   description: string;
   status: ProjectStatus;
   plans: Plan[];
+  /** Bound skill IDs from SKILL_CATALOG. */
+  skills: string[];
+  /** Bound expert/agent IDs from experts-store. */
+  experts: string[];
+  /** Bound connector/MCP server IDs from connections store. */
+  connectors: string[];
+  /** Command-input activity events. */
+  activityEvents: ProjectActivityEvent[];
+  /** Bound OpenCode session (thread) id powering the project chatbot. */
+  threadId?: string;
+  /** Server workspace id the chatbot session runs against. */
+  workspaceId?: string;
   createdAt: string;
   updatedAt: string;
 };
 
 export const PERSISTED_PROJECTS_KEY = "openwork:projects:v2";
-export const STORE_VERSION = 2;
+export const STORE_VERSION = 4;
 export const PROJECT_WORK_COLUMNS: ReadonlyArray<TaskStatus> = [
   "todo",
   "in_progress",
@@ -139,16 +183,80 @@ function migrateLegacyProject(project: LegacyV1Project): Project {
     description: project.description ?? "",
     status: project.status ?? "active",
     plans,
+    skills: [],
+    experts: [],
+    connectors: [],
+    activityEvents: [],
     createdAt: timestamp,
     updatedAt: project.updatedAt ?? timestamp,
   };
 }
 
+/**
+ * A persisted project predates the Plan model when it has no `plans` array
+ * (it carried flat `milestones`/`works` instead). Content-sniffing this lets
+ * one migration path handle every historical shape without trusting a version.
+ */
+function isLegacyV1Project(project: Partial<Project> | LegacyV1Project): project is LegacyV1Project {
+  return !Array.isArray((project as Partial<Project>).plans);
+}
+
+/**
+ * The binding arrays (`skills`/`experts`/`connectors`/`activityEvents`) and the
+ * nested task fields (`subtasks`/`evidence`) were added to the model after rows
+ * already sat in localStorage under the same key, so older rows lack them.
+ * Consumers read `task.subtasks.filter` / `task.evidence.status` directly, so we
+ * backfill the defaults here — the persistence boundary is the one place
+ * untrusted localStorage data is allowed to be normalized.
+ */
+function normalizeTask(task: Task): Task {
+  return {
+    ...task,
+    status: task.status ?? "todo",
+    subtasks: task.subtasks ?? [],
+    evidence: task.evidence ?? { status: "pending", notes: "" },
+    createdAt: task.createdAt ?? now(),
+    deliverables: task.deliverables ?? [],
+  };
+}
+
+function normalizePlan(plan: Plan): Plan {
+  return {
+    ...plan,
+    status: plan.status ?? "open",
+    description: plan.description ?? "",
+    createdAt: plan.createdAt ?? now(),
+    tasks: (plan.tasks ?? []).map(normalizeTask),
+  };
+}
+
+function normalizeProject(project: Project): Project {
+  return {
+    ...project,
+    plans: (project.plans ?? []).map(normalizePlan),
+    skills: project.skills ?? [],
+    experts: project.experts ?? [],
+    connectors: project.connectors ?? [],
+    activityEvents: project.activityEvents ?? [],
+  };
+}
+
 export type ProjectStore = {
   projects: Project[];
-  createProject: (name: string, description?: string) => string;
+  createProject: (name: string, description?: string, bindings?: {
+    skills?: string[];
+    experts?: string[];
+    connectors?: string[];
+  }) => string;
   updateProject: (projectId: string, patch: Partial<Pick<Project, "name" | "description" | "status">>) => void;
   deleteProject: (projectId: string) => void;
+  updateProjectBindings: (projectId: string, bindings: {
+    skills?: string[];
+    experts?: string[];
+    connectors?: string[];
+  }) => void;
+  setProjectThread: (projectId: string, thread: { threadId: string; workspaceId: string }) => void;
+  addActivityEvent: (projectId: string, text: string, category?: ActivityCategory) => void;
   addPlan: (projectId: string, title: string, description?: string) => void;
   updatePlan: (projectId: string, planId: string, patch: Partial<Pick<Plan, "title" | "description" | "status">>) => void;
   removePlan: (projectId: string, planId: string) => void;
@@ -161,6 +269,11 @@ export type ProjectStore = {
   toggleSubtask: (projectId: string, planId: string, taskId: string, subtaskId: string) => void;
   removeSubtask: (projectId: string, planId: string, taskId: string, subtaskId: string) => void;
   setTaskAssignee: (projectId: string, planId: string, taskId: string, assignee: string) => void;
+  setTaskDeliverables: (projectId: string, planId: string, taskId: string, deliverables: TaskDeliverable[]) => void;
+  setTaskProgressSummary: (projectId: string, planId: string, taskId: string, summary: string) => void;
+  setTaskCustomFields: (projectId: string, planId: string, taskId: string, fields: Record<string, string>) => void;
+  packageTaskForTransfer: (projectId: string, planId: string, taskId: string) => TaskTransferPackage | null;
+  transferTask: (fromProjectId: string, fromPlanId: string, taskId: string, toProjectId: string, toPlanId: string) => boolean;
 };
 
 function applyProjectMutation(
@@ -205,10 +318,10 @@ function applyTaskMutation(
 
 export const useProjectStore = create<ProjectStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       projects: [],
 
-      createProject: (name, description = "") => {
+      createProject: (name, description = "", bindings) => {
         const id = crypto.randomUUID();
         const timestamp = now();
         const project: Project = {
@@ -217,6 +330,10 @@ export const useProjectStore = create<ProjectStore>()(
           description,
           status: "active",
           plans: [],
+          skills: bindings?.skills ?? [],
+          experts: bindings?.experts ?? [],
+          connectors: bindings?.connectors ?? [],
+          activityEvents: [],
           createdAt: timestamp,
           updatedAt: timestamp,
         };
@@ -233,6 +350,36 @@ export const useProjectStore = create<ProjectStore>()(
         set((state) => ({
           projects: state.projects.filter((project) => project.id !== projectId),
         })),
+
+      updateProjectBindings: (projectId, bindings) =>
+        set((state) =>
+          applyProjectMutation(state, projectId, (project) => ({
+            ...project,
+            skills: bindings.skills ?? project.skills,
+            experts: bindings.experts ?? project.experts,
+            connectors: bindings.connectors ?? project.connectors,
+          })),
+        ),
+
+      setProjectThread: (projectId, thread) =>
+        set((state) =>
+          applyProjectMutation(state, projectId, (project) => ({
+            ...project,
+            threadId: thread.threadId,
+            workspaceId: thread.workspaceId,
+          })),
+        ),
+
+      addActivityEvent: (projectId, text, category = "all") =>
+        set((state) =>
+          applyProjectMutation(state, projectId, (project) => ({
+            ...project,
+            activityEvents: [
+              { id: crypto.randomUUID(), text, category, createdAt: now() },
+              ...project.activityEvents,
+            ],
+          })),
+        ),
 
       addPlan: (projectId, title, description = "") =>
         set((state) =>
@@ -367,22 +514,118 @@ export const useProjectStore = create<ProjectStore>()(
         set((state) =>
           applyTaskMutation(state, projectId, planId, taskId, (task) => ({ ...task, assignee })),
         ),
+
+      setTaskDeliverables: (projectId, planId, taskId, deliverables) =>
+        set((state) =>
+          applyTaskMutation(state, projectId, planId, taskId, (task) => ({ ...task, deliverables })),
+        ),
+
+      setTaskProgressSummary: (projectId, planId, taskId, summary) =>
+        set((state) =>
+          applyTaskMutation(state, projectId, planId, taskId, (task) => ({ ...task, progressSummary: summary })),
+        ),
+
+      setTaskCustomFields: (projectId, planId, taskId, fields) =>
+        set((state) =>
+          applyTaskMutation(state, projectId, planId, taskId, (task) => ({ ...task, customFields: fields })),
+        ),
+
+      packageTaskForTransfer: (projectId, planId, taskId) => {
+        const state = get();
+        const project = state.projects.find((p: Project) => p.id === projectId);
+        if (!project) return null;
+        const plan = project.plans.find((p: Plan) => p.id === planId);
+        if (!plan) return null;
+        const task = plan.tasks.find((t: Task) => t.id === taskId);
+        if (!task) return null;
+        return {
+          taskId: task.id,
+          title: task.title,
+          status: task.status,
+          deliverables: task.deliverables ?? [],
+          progressSummary: task.progressSummary ?? "",
+          customFields: task.customFields ?? {},
+          subtaskSummary: {
+            total: task.subtasks.length,
+            done: task.subtasks.filter((s: Subtask) => s.done).length,
+          },
+          packagedAt: now(),
+        };
+      },
+
+      transferTask: (fromProjectId, fromPlanId, taskId, toProjectId, toPlanId) => {
+        const state = get();
+        const fromProject = state.projects.find((p: Project) => p.id === fromProjectId);
+        if (!fromProject) return false;
+        const fromPlan = fromProject.plans.find((p: Plan) => p.id === fromPlanId);
+        if (!fromPlan) return false;
+        const task = fromPlan.tasks.find((t: Task) => t.id === taskId);
+        if (!task) return false;
+        const toProject = state.projects.find((p: Project) => p.id === toProjectId);
+        if (!toProject) return false;
+        const toPlan = toProject.plans.find((p: Plan) => p.id === toPlanId);
+        if (!toPlan) return false;
+
+        const transferredTask: Task = {
+          ...task,
+          id: crypto.randomUUID(),
+          status: "todo",
+          createdAt: now(),
+        };
+
+        set((current) => ({
+          ...current,
+          projects: current.projects.map((project) => {
+            if (project.id === toProjectId) {
+              return {
+                ...project,
+                plans: project.plans.map((plan) =>
+                  plan.id === toPlanId
+                    ? { ...plan, tasks: [...plan.tasks, transferredTask] }
+                    : plan,
+                ),
+                updatedAt: now(),
+              };
+            }
+            if (project.id === fromProjectId) {
+              return {
+                ...project,
+                plans: project.plans.map((plan) =>
+                  plan.id === fromPlanId
+                    ? { ...plan, tasks: plan.tasks.filter((t) => t.id !== taskId) }
+                    : plan,
+                ),
+                updatedAt: now(),
+              };
+            }
+            return project;
+          }),
+        }));
+        return true;
+      },
     }),
     {
       name: PERSISTED_PROJECTS_KEY,
       version: STORE_VERSION,
       storage: createJSONStorage(() => localStorage),
-      migrate: (persistedState: unknown, version: number) => {
-        if (version < STORE_VERSION && persistedState && typeof persistedState === "object") {
-          const legacyState = persistedState as { projects?: LegacyV1Project[] };
-          if (Array.isArray(legacyState.projects)) {
-            return {
-              ...legacyState,
-              projects: legacyState.projects.map(migrateLegacyProject),
-            };
-          }
+      migrate: (persistedState: unknown): ProjectStore => {
+        if (!persistedState || typeof persistedState !== "object") {
+          return persistedState as ProjectStore;
         }
-        return persistedState as ProjectStore;
+        const state = persistedState as { projects?: unknown };
+        if (!Array.isArray(state.projects)) {
+          return persistedState as ProjectStore;
+        }
+        return {
+          ...persistedState,
+          projects: state.projects.map((project) =>
+            normalizeProject(
+              isLegacyV1Project(project as LegacyV1Project)
+                ? migrateLegacyProject(project as LegacyV1Project)
+                : project as Project,
+            ),
+          ),
+        } as ProjectStore;
       },
     },
   ),

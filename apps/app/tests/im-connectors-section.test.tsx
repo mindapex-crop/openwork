@@ -26,20 +26,21 @@ describe("ImConnectorsSection", () => {
     expect(html).toContain("0 / 5 connected");
   });
 
+  // 目录文案改走 i18n 后按当前 locale 解析；本套测试默认 en，所以断言英文串。
   test("renders all 5 platform names", () => {
-    expect(html).toContain("飞书");
-    expect(html).toContain("企业微信");
-    expect(html).toContain("钉钉");
+    expect(html).toContain("Feishu");
+    expect(html).toContain("WeCom");
+    expect(html).toContain("DingTalk");
     expect(html).toContain("Slack");
     expect(html).toContain("Discord");
   });
 
   test("each platform has a description", () => {
-    expect(html).toContain("通过飞书机器人接收消息");
-    expect(html).toContain("接入企业微信应用");
-    expect(html).toContain("通过钉钉连接器");
-    expect(html).toContain("在 Slack 频道中");
-    expect(html).toContain("Discord Bot 集成");
+    expect(html).toContain("Receive messages, create tasks and reply through a Feishu bot.");
+    expect(html).toContain("Connect a WeCom app and start agent sessions in internal groups.");
+    expect(html).toContain("Push artifacts to DingTalk group chats and work notifications.");
+    expect(html).toContain("Talk with the OpenWork agent in a Slack channel.");
+    expect(html).toContain("Discord bot integration: create a dedicated skill channel.");
   });
 
   test("all platforms show 'Disconnected' status initially", () => {

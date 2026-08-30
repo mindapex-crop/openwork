@@ -402,6 +402,28 @@ export type DenBillingSummary = {
   benefitId: string | null;
 };
 
+export type DenCreditsTier = "free" | "pro" | "enterprise";
+
+export type DenCreditsBalance = {
+  orgId: string;
+  tier: DenCreditsTier;
+  balance: number;
+  totalPurchased: number;
+  totalConsumed: number;
+  multiplier: number;
+};
+
+export type DenCreditsTransaction = {
+  id: string;
+  orgId: string;
+  type: "purchase" | "consumption" | "refund" | "grant";
+  amount: number;
+  balanceAfter: number;
+  description: string | null;
+  reference: string | null;
+  createdAt: string;
+};
+
 type DenAuthResult = {
   user: DenUser | null;
   token: string | null;
@@ -2237,6 +2259,41 @@ function getBillingInvoice(value: unknown): DenBillingInvoice | null {
   };
 }
 
+function getCreditsBalance(payload: unknown): DenCreditsBalance {
+  if (!isRecord(payload)) {
+    throw new DenApiError(500, "invalid_credits_payload", "Credits balance response was malformed.");
+  }
+  const tier = payload.tier === "pro" || payload.tier === "enterprise" ? payload.tier : "free";
+  return {
+    orgId: typeof payload.orgId === "string" ? payload.orgId : "",
+    tier,
+    balance: typeof payload.balance === "number" ? payload.balance : 0,
+    totalPurchased: typeof payload.totalPurchased === "number" ? payload.totalPurchased : 0,
+    totalConsumed: typeof payload.totalConsumed === "number" ? payload.totalConsumed : 0,
+    multiplier: typeof payload.multiplier === "number" ? payload.multiplier : 1.0,
+  };
+}
+
+function getCreditsTransactions(payload: unknown): DenCreditsTransaction[] {
+  if (!isRecord(payload) || !Array.isArray(payload.transactions)) {
+    return [];
+  }
+  return payload.transactions.map((tx: unknown) => {
+    if (!isRecord(tx)) return null;
+    const type = tx.type === "purchase" || tx.type === "consumption" || tx.type === "refund" || tx.type === "grant" ? tx.type : "consumption";
+    return {
+      id: typeof tx.id === "string" ? tx.id : "",
+      orgId: typeof tx.orgId === "string" ? tx.orgId : "",
+      type,
+      amount: typeof tx.amount === "number" ? tx.amount : 0,
+      balanceAfter: typeof tx.balanceAfter === "number" ? tx.balanceAfter : 0,
+      description: typeof tx.description === "string" ? tx.description : null,
+      reference: typeof tx.reference === "string" ? tx.reference : null,
+      createdAt: typeof tx.createdAt === "string" ? tx.createdAt : "",
+    } satisfies DenCreditsTransaction;
+  }).filter((tx): tx is DenCreditsTransaction => tx !== null);
+}
+
 function getBillingSummary(payload: unknown): DenBillingSummary | null {
   if (!isRecord(payload) || !isRecord(payload.billing)) {
     return null;
@@ -2883,6 +2940,47 @@ export function createDenClient(options: { baseUrl: string; token?: string | nul
         subscription: isRecord(payload) ? getBillingSubscription(payload.subscription) : null,
         billing,
       };
+    },
+
+    async getCreditsBalance(orgId: string): Promise<DenCreditsBalance> {
+      const payload = await requestJson<unknown>(baseUrls, "/v1/credits/balance", {
+        method: "GET",
+        token,
+        organizationId: orgId,
+      });
+      return getCreditsBalance(payload);
+    },
+
+    async listCreditsTransactions(orgId: string, limit = 50, offset = 0): Promise<DenCreditsTransaction[]> {
+      const params = new URLSearchParams();
+      params.set("limit", String(limit));
+      params.set("offset", String(offset));
+      const payload = await requestJson<unknown>(baseUrls, `/v1/credits/transactions?${params.toString()}`, {
+        method: "GET",
+        token,
+        organizationId: orgId,
+      });
+      return getCreditsTransactions(payload);
+    },
+
+    async purchaseCredits(orgId: string, amount: number, reference?: string): Promise<DenCreditsBalance> {
+      const payload = await requestJson<unknown>(baseUrls, "/v1/credits/purchase", {
+        method: "POST",
+        token,
+        organizationId: orgId,
+        body: { amount, reference },
+      });
+      return getCreditsBalance(payload);
+    },
+
+    async setCreditsTier(orgId: string, tier: DenCreditsTier): Promise<DenCreditsBalance> {
+      const payload = await requestJson<unknown>(baseUrls, "/v1/credits/tier", {
+        method: "PUT",
+        token,
+        organizationId: orgId,
+        body: { tier },
+      });
+      return getCreditsBalance(payload);
     },
   };
 }

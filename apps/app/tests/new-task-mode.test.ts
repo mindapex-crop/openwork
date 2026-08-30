@@ -36,9 +36,12 @@ describe("resolveTaskModeVariant", () => {
 });
 
 describe("frameTaskPrompt", () => {
-  test("ask mode returns the trimmed prompt verbatim with no framing", () => {
-    expect(frameTaskPrompt("ask", "What is the capitol of France?")).toBe("What is the capitol of France?");
-    expect(frameTaskPrompt("ask", "  hello  ")).toBe("hello");
+  test("ask mode appends the read-only framing (WorkBuddy 问一问只读对标)", () => {
+    const framed = frameTaskPrompt("ask", "What is the capitol of France?");
+    expect(framed.startsWith("What is the capitol of France?")).toBe(true);
+    expect(framed).toContain("read-only");
+    expect(framed).toContain("Do NOT modify files");
+    expect(frameTaskPrompt("ask", "  hello  ").startsWith("hello")).toBe(true);
   });
 
   test("empty or whitespace-only prompts return empty string for all modes (no framing wrappers)", () => {
@@ -91,7 +94,8 @@ describe("frameTaskPrompt", () => {
   test("all modes handle a complex realistic prompt with markdown and code blocks", () => {
     const prompt = "Fix this:\n```ts\nconst x: any = 1;\n```\nMake it typed.";
     const askFramed = frameTaskPrompt("ask", prompt);
-    expect(askFramed).toBe(prompt);
+    expect(askFramed.startsWith(prompt)).toBe(true);
+    expect(askFramed).toContain("read-only");
     const craftFramed = frameTaskPrompt("craft", prompt);
     expect(craftFramed.startsWith(prompt)).toBe(true);
     const planFramed = frameTaskPrompt("plan", prompt);
@@ -101,7 +105,8 @@ describe("frameTaskPrompt", () => {
   test("超长 prompt（10KB）正常处理不截断", () => {
     const longPrompt = "A".repeat(10_000);
     const askResult = frameTaskPrompt("ask", longPrompt);
-    expect(askResult).toBe(longPrompt);
+    expect(askResult.startsWith(longPrompt)).toBe(true);
+    expect(askResult.length).toBeGreaterThan(10_000);
     const craftResult = frameTaskPrompt("craft", longPrompt);
     expect(craftResult.startsWith(longPrompt)).toBe(true);
     expect(craftResult.length).toBeGreaterThan(10_000);
@@ -121,7 +126,8 @@ describe("frameTaskPrompt", () => {
 
   test("prompt 含 emoji 正常处理", () => {
     const prompt = "修复这个 🐛 bug 🤖";
-    expect(frameTaskPrompt("ask", prompt)).toBe(prompt);
+    expect(frameTaskPrompt("ask", prompt).startsWith(prompt)).toBe(true);
+    expect(frameTaskPrompt("ask", prompt)).toContain("read-only");
     expect(frameTaskPrompt("craft", prompt).startsWith(prompt)).toBe(true);
     expect(frameTaskPrompt("plan", prompt).startsWith(prompt)).toBe(true);
   });
@@ -136,10 +142,11 @@ describe("frameTaskPrompt", () => {
     expect(framed.length).toBeGreaterThan("Build feature X".length);
   });
 
-  test("resolveTaskModeVariant + frameTaskPrompt 组合使用：ask 模式保持默认 + 无 framing", () => {
+  test("resolveTaskModeVariant + frameTaskPrompt 组合使用：ask 模式保持默认变体 + 只读 framing", () => {
     const variant = resolveTaskModeVariant("ask", "balanced");
     expect(variant).toBe("balanced");
     const framed = frameTaskPrompt("ask", "Quick question");
-    expect(framed).toBe("Quick question");
+    expect(framed.startsWith("Quick question")).toBe(true);
+    expect(framed).toContain("read-only");
   });
 });

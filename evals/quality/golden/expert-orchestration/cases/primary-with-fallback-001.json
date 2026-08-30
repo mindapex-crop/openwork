@@ -1,0 +1,30 @@
+{
+  "id": "expert-orchestration.primary-with-fallback-001",
+  "domain": "expert-orchestration",
+  "title": "Primary-with-fallback dispatch prefers the primary member even when it appears later in the list",
+  "input": {
+    "dispatchPolicy": {
+      "kind": "primary-with-fallback",
+      "primary": "lead",
+      "fallbacks": ["backup"]
+    },
+    "members": [
+      { "agentId": "backup" },
+      { "agentId": "lead" }
+    ]
+  },
+  "grading": {
+    "mode": "deterministic",
+    "expected": {
+      "type": "exact",
+      "value": {
+        "policyKind": "primary-with-fallback",
+        "selectedAgentId": "lead",
+        "eligibleAgents": ["backup", "lead"]
+      }
+    }
+  },
+  "metadata": {
+    "notes": "Verifies ordering independence: the primary is picked by id, not by list position."
+  }
+}

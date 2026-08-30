@@ -1,0 +1,19 @@
+{
+  "id": "expert-orchestration.strategy-balanced-001",
+  "domain": "expert-orchestration",
+  "title": "The balanced team strategy reports medium complexity/cost/quality meta",
+  "input": {
+    "strategy": "balanced"
+  },
+  "grading": {
+    "mode": "deterministic",
+    "expected": {
+      "type": "shape",
+      "required": ["policyKind", "selectedAgentId", "eligibleAgents", "strategyMeta"],
+      "fields": { "strategyMeta": "object", "eligibleAgents": "array" }
+    }
+  },
+  "metadata": {
+    "notes": "Shape-level check: guards the strategyMeta surface without over-pinning product wording."
+  }
+}

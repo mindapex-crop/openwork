@@ -17,7 +17,7 @@ import {
 } from "../../app/lib/den-session-events";
 import { evalRelaunchDesktopApp } from "../../app/lib/desktop";
 import { Button } from "../../components/ui/button";
-import { t } from "../../i18n";
+import { t, useI18nVersion } from "../../i18n";
 import { useDenAuth } from "../domains/cloud/den-auth-provider";
 import {
   clearCloudInventoryCache,
@@ -33,6 +33,7 @@ import { useVisualViewportInset } from "../../hooks/use-visual-viewport-inset";
 import { DevProfiler, DevProfilerOverlay } from "./dev-profiler";
 import { ReactRenderWatchdogOverlay } from "./react-render-watchdog-overlay";
 import { CloudWorkspaceOverlay, CloudWorkspaceStatusProvider } from "./cloud-workspace-overlay";
+import { RemoteLockOverlay } from "@/react-app/domains/devices/lock-overlay";
 import { AppMenuProvider } from "./app-menu";
 import {
   OpenworkControlProvider,
@@ -45,6 +46,7 @@ import { SessionRoute } from "./session-route";
 import { SettingsRoute } from "./settings-route";
 import { ShellConfigProvider } from "./shell-config";
 import { WelcomeRoute } from "./welcome-route";
+import { WorkModeOnboarding } from "../domains/onboarding/work-mode-onboarding";
 import { readOrgSelectionPending } from "../../app/lib/den-sign-in-intent";
 import { signedInRoute } from "./den-signin-routing";
 import { registerComposerContributions } from "../extensions/register-composer-actions";
@@ -356,6 +358,9 @@ let appOpenedCaptured = false;
 export function AppRoot() {
   useDesktopFontZoomBehavior();
   useVisualViewportInset();
+  // Locale is reactive: setLocale bumps the version so the whole mounted
+  // tree re-renders with fresh translations immediately.
+  useI18nVersion();
 
   // Boot the composer contribution layer once, before any composer mounts.
   // Called unconditionally at the top of the component so the first render
@@ -424,102 +429,6 @@ export function AppRoot() {
               />
 
               <Route
-                path="/session"
-                element={
-                  <DevProfiler id="SessionRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/session/:sessionId"
-                element={
-                  <DevProfiler id="SessionRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/workspace/:workspaceId/session"
-                element={
-                  <DevProfiler id="SessionRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/workspace/:workspaceId/session/:sessionId"
-                element={
-                  <DevProfiler id="SessionRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/automations"
-                element={
-                  <DevProfiler id="AutomationsRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/workspace/:workspaceId/extensions/*"
-                element={
-                  <DevProfiler id="SessionRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/extensions/*"
-                element={
-                  <DevProfiler id="SessionRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/projects"
-                element={
-                  <DevProfiler id="SessionRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/skills"
-                element={
-                  <DevProfiler id="SessionRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/collab-hub"
-                element={
-                  <DevProfiler id="SessionRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/marketplace"
-                element={
-                  <DevProfiler id="SessionRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
-                path="/knowledge"
-                element={
-                  <DevProfiler id="SessionRoute">
-                    <SessionRoute />
-                  </DevProfiler>
-                }
-              />
-              <Route
                 path="/workspace/:workspaceId/settings/*"
                 element={
                   <DevProfiler id="SettingsRoute">
@@ -535,15 +444,32 @@ export function AppRoot() {
                   </DevProfiler>
                 }
               />
-              {/* Default + fallback: land on the session view. Users open
-                  settings deliberately via the sidebar or command palette. */}
-              <Route path="/" element={<Navigate to="/session" replace />} />
-              <Route path="*" element={<Navigate to="/session" replace />} />
+              {/*
+                Single catch-all for the entire session surface. Every sidebar
+                tab (assistant, plans, experts, skills, connectors, library,
+                automations, projects, inspiration) and workspace session
+                URL renders SessionRoute through ONE <Route> element so React
+                keeps the component mounted across tab switches — no
+                unmount/remount flash.
+                /signin, /onboarding, /welcome, and /settings are separate
+                routes above because they render different components.
+                React Router v6 scores explicit patterns higher than *, so
+                the settings routes always win for /settings/* URLs.
+              */}
+              <Route
+                path="*"
+                element={
+                  <DevProfiler id="SessionRoute">
+                    <SessionRoute />
+                  </DevProfiler>
+                }
+              />
             </Routes>
           </DenSigninGate>
           <LoadingOverlay />
           </EnterpriseActivationGate>
           <CloudWorkspaceOverlay />
+          <RemoteLockOverlay />
           </CloudWorkspaceStatusProvider>
         </OpenworkControlProvider>
         </AppMenuProvider>
@@ -561,6 +487,7 @@ export function AppRoot() {
       <NewProvidersListener />
       <DevProfilerOverlay />
       <ReactRenderWatchdogOverlay />
+      <WorkModeOnboarding />
     </>
   );
 }

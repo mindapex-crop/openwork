@@ -7,6 +7,7 @@ import { readDenSettings } from "@/app/lib/den";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import { runSimpleCollab, type RunSimpleCollabResult } from "./collab-api";
@@ -21,7 +22,7 @@ type SubmitState =
   | { phase: "progress"; result: RunSimpleCollabResult }
   | { phase: "error"; message: string; noAgent: boolean };
 
-const PLACEHOLDER = "描述你想完成的事，我会组建一个 AI 团队帮你搞定";
+const PLACEHOLDER = t("collab.placeholder");
 
 function isCompleted(status: string) {
   return status === "completed" || status === "done" || status === "succeeded";
@@ -43,14 +44,14 @@ function subtaskBadgeLabel(status: string) {
     case "completed":
     case "done":
     case "succeeded":
-      return "已完成";
+      return t("collab.status_completed");
     case "failed":
-      return "失败";
+      return t("collab.status_failed");
     case "running":
-      return "执行中";
+      return t("collab.status_running");
     case "pending":
     case "queued":
-      return "排队中";
+      return t("collab.status_pending");
     default:
       return status;
   }
@@ -79,7 +80,7 @@ function StrategyBadge({ strategy }: { strategy: string }) {
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-violet-500/10 px-2.5 py-0.5 text-[12px] font-medium text-violet-600">
       <Sparkles className="size-3" />
-      策略：{strategy}
+      {t("collab.strategy", { strategy })}
     </span>
   );
 }
@@ -104,7 +105,7 @@ export function CollabHubPage(props: CollabHubPageProps) {
     if (!hasConfiguredCollabModel()) {
       setState({
         phase: "error",
-        message: "尚未配置可用的 AI 模型，配置后可组建 AI 团队帮你干活。",
+        message: t("collab.no_model_title"),
         noAgent: true,
       });
       return;
@@ -114,7 +115,7 @@ export function CollabHubPage(props: CollabHubPageProps) {
     if (outcome.ok) {
       setState({ phase: "progress", result: outcome.data });
     } else if (outcome.kind === "no_agent_available") {
-      setState({ phase: "error", message: "暂未检测到可用的 AI 助手，去设置里配置", noAgent: true });
+      setState({ phase: "error", message: t("collab.no_agent_hint"), noAgent: true });
     } else {
       setState({ phase: "error", message: outcome.message, noAgent: false });
     }
@@ -124,9 +125,9 @@ export function CollabHubPage(props: CollabHubPageProps) {
     <div className="mx-auto flex w-full max-w-[640px] flex-col items-stretch gap-6 px-4 py-10 sm:px-6">
       <div className="space-y-1.5 text-center">
         <h2 className="text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">
-          今天想做点什么事？
+          {t("collab.title")}
         </h2>
-        <p className="text-[13px] text-muted-foreground">说出来，我帮你搞定</p>
+        <p className="text-[13px] text-muted-foreground">{t("collab.subtitle")}</p>
       </div>
 
       {state.phase !== "progress" ? (
@@ -134,10 +135,10 @@ export function CollabHubPage(props: CollabHubPageProps) {
           <CardHeader className="px-5 pt-5">
             <CardTitle className="flex items-center gap-2 text-[15px]">
               <Sparkles className="size-4 text-violet-500" />
-              派个活
+              {t("collab.assign_title")}
             </CardTitle>
             <CardDescription className="text-[12px]">
-              一次描述，自动分解并安排给合适的 AI 助手处理
+              {t("collab.assign_desc")}
             </CardDescription>
           </CardHeader>
           <CardContent className="px-5 pb-5">
@@ -146,11 +147,11 @@ export function CollabHubPage(props: CollabHubPageProps) {
                 <div className="flex items-start gap-2">
                   <AlertCircle className="mt-0.5 size-4 shrink-0 text-amber-500" />
                   <p className="text-[12px] leading-[17px] text-foreground">
-                    尚未配置可用的 AI 模型，配置后可组建 AI 团队帮你干活。
+                    {t("collab.no_model_title")}
                   </p>
                 </div>
                 <Button variant="outline" size="sm" className="shrink-0" onClick={handleGoConfigure}>
-                  去配置
+                  {t("collab.go_configure")}
                 </Button>
               </div>
             ) : null}
@@ -175,7 +176,7 @@ export function CollabHubPage(props: CollabHubPageProps) {
                 disabled={submitting || !draft.trim()}
               >
                 {submitting ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                {submitting ? "正在组建团队…" : "帮我搞定它"}
+                {submitting ? t("collab.submitting") : t("collab.submit")}
               </Button>
             </div>
           </CardContent>
@@ -190,18 +191,18 @@ export function CollabHubPage(props: CollabHubPageProps) {
             <AlertCircle className={cn("mt-0.5 size-5 shrink-0", state.noAgent ? "text-amber-500" : "text-red-500")} />
             <div className="flex-1">
               <div className="text-[13px] font-medium text-foreground">
-                {state.noAgent ? "暂未检测到可用的 AI 助手" : "请求失败"}
+                {state.noAgent ? t("collab.no_agent_title") : t("collab.failed")}
               </div>
               <p className="mt-1 text-[12px] text-muted-foreground">
-                {state.noAgent ? "可以去设置里配置一个 AI 助手后再试。" : state.message}
+                {state.noAgent ? t("collab.no_agent_hint") : state.message}
               </p>
               <div className="mt-3 flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => setState({ phase: "idle" })}>
-                  返回
+                  {t("collab.back")}
                 </Button>
                 {props.onClose ? (
                   <Button variant="outline" size="sm" onClick={props.onClose}>
-                    打开设置
+                    {t("collab.open_settings")}
                   </Button>
                 ) : null}
               </div>
@@ -224,13 +225,13 @@ function ProgressPanel({ result }: { result: RunSimpleCollabResult }) {
           ) : (
             <Loader2 className="size-4 animate-spin text-sky-500" />
           )}
-          协作进度
+          {t("collab.progress_title")}
         </CardTitle>
         <CardDescription className="flex items-center gap-2 text-[12px]">
           {(result.subtasks?.length ?? 0) > 0 ? (
-            <>{result.subtasks.length} 个子任务被分配给 {result.subtasks.length} 个 AI 助手</>
+            <>{t("collab.subtasks_assigned", { count: result.subtasks.length })}</>
           ) : (
-            <>AI 团队正在筹备中</>
+            <>{t("collab.team_preparing")}</>
           )}
           <StrategyBadge strategy={result.strategy} />
         </CardDescription>
@@ -249,7 +250,7 @@ function ProgressPanel({ result }: { result: RunSimpleCollabResult }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate text-[13px] font-medium text-foreground">
-                      {subtask.agentId || "AI 助手"}
+                      {subtask.agentId || t("collab.agent_fallback")}
                     </span>
                     <span
                       className={cn(
@@ -271,14 +272,14 @@ function ProgressPanel({ result }: { result: RunSimpleCollabResult }) {
         ) : (
           <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
             <Loader2 className="size-6 animate-spin text-sky-500" />
-            <p className="text-[13px] text-muted-foreground">计划正在生成，稍候片刻…</p>
+            <p className="text-[13px] text-muted-foreground">{t("collab.plan_generating")}</p>
           </div>
         )}
 
         {completed ? (
           <div className="mt-4 flex items-center gap-2 rounded-xl bg-emerald-500/10 p-3 text-[13px] font-medium text-emerald-600">
             <CheckCircle2 className="size-4" />
-            协作已完成
+            {t("collab.completed")}
           </div>
         ) : null}
       </CardContent>

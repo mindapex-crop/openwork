@@ -66,6 +66,8 @@ export type LocalPreferences = {
     memory: boolean;
     /** Collaboration surface mode; defaults to "simple". */
     collabMode: CollabMode;
+    /** Allow mobile devices to pair and control this workspace remotely. */
+    mobileAccess: boolean;
   };
   /**
    * Set to true after the user completes the welcome/onboarding flow
@@ -105,7 +107,7 @@ const INITIAL_PREFS: LocalPreferences = {
   defaultModel: null,
   selectedAgent: null,
   releaseChannel: "stable",
-  featureFlags: { microsandboxCreateSandbox: true, continuousEngine: false, memory: false, collabMode: "simple" },
+  featureFlags: { microsandboxCreateSandbox: true, continuousEngine: false, memory: false, collabMode: "simple", mobileAccess: false },
   hasCompletedOnboarding: false,
   analyticsEnabled: true,
   desktopNotifications: DEFAULT_DESKTOP_NOTIFICATION_PREFERENCE,

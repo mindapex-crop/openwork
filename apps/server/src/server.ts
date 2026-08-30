@@ -84,24 +84,37 @@ import { serveStaticUi } from "./static-ui.js";
 import { externalFetch, loopbackFetch } from "./server-fetch.js";
 import { registerCoreRoutes } from "./routes/core.js";
 import { registerFileRoutes } from "./routes/files.js";
+import { registerUsageRoutes } from "./routes/usage.js";
 import { registerOperationRoutes } from "./routes/operations.js";
 import { addRoute, matchRoute, type AuthMode, type RequestContext, type Route } from "./routes/registry.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
+import { registerRelaySyncRoutes } from "./routes/relay-sync.js";
+import { registerDeviceRoutes } from "./routes/devices.js";
+import { registerProjectRoutes } from "./routes/projects.js";
+import { registerAutomationRoutes } from "./routes/automations.js";
 import { registerWorkspaceRoutes } from "./routes/workspaces.js";
 import { registerCloudMcpRoutes } from "./routes/cloud-mcp.js";
 import { registerSpaceRoutes } from "./routes/space.js";
 import { registerAgentRuntimeRoutes } from "./routes/agent-runtimes.js";
 import { registerWorktreeRoutes } from "./routes/worktrees.js";
 import { registerChatRoutes } from "./routes/chat.js";
+import { registerChatChannelsRoutes } from "./routes/chat-channels.js";
 import { registerTrajectoryRoutes } from "./routes/trajectories.js";
 import { registerTeamRoutes } from "./routes/teams.js";
 import { registerAgentRoutes } from "./routes/agents.js";
+import { registerExpertRoutes } from "./routes/experts.js";
 import { RuntimeRegistry } from "./runtime-registry.js";
 import { getGlobalAgentScanner } from "./agent-scanner.js";
 import { isCliAgentId, runCliAgentPrompt } from "./cli-agent-session.js";
 import { WorktreeService } from "./worktree/worktree-service.js";
 import { ChatRelayService } from "./chat/chat-relay.js";
 import { InMemoryChatChannel } from "./chat/channels/in-memory.js";
+import { HttpChatChannel } from "./chat/channels/http-chat-channel.js";
+import { createChatChannelStore } from "./chat/channel-store.js";
+import { createWecomChatChannel } from "./chat/channels/wecom-chat-channel.js";
+import { createFeishuChatChannel } from "./chat/channels/feishu-chat-channel.js";
+import { createDingtalkChatChannel } from "./chat/channels/dingtalk-chat-channel.js";
+import { createSlackChatChannel } from "./chat/channels/slack-chat-channel.js";
 import { createSurfaceRegistry, OpenWorkChatSurface } from "./surface/index.js";
 import {
   completeLocalManagedMcpAuthorization,
@@ -1002,7 +1015,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       : engineHasActiveSessions(config, resolveEngineRuntimeWorkspace(config)),
     logger: toManagedProviderAuthLogger(logger),
   });
-  const routes = createRoutes(
+  const routes = await createRoutes(
     config,
     approvals,
     tokens,
@@ -2145,7 +2158,7 @@ function serializeWorkspace(workspace: ServerConfig["workspaces"][number]) {
   };
 }
 
-function createRoutes(
+async function createRoutes(
   config: ServerConfig,
   approvals: ApprovalService,
   tokens: TokenService,
@@ -2155,7 +2168,7 @@ function createRoutes(
   engineMcpServerState: EngineMcpServerState,
   logger: ServerLogger,
   cloudProviderSync: CloudProviderSync,
-): Route[] {
+): Promise<Route[]> {
   const routes: Route[] = [];
   void runtimeRegistry;
   registerCoreRoutes({
@@ -2212,6 +2225,25 @@ function createRoutes(
   };
   const chatRelay = new ChatRelayService({ cwd: config.workspaces[0]?.path || process.cwd() });
 
+  // IM 远程控制四通道（企微/飞书/钉钉/Slack）：配置 sqlite 持久化 + HTTP 通道实例
+  const chatChannelStore = createChatChannelStore(config);
+  const platformChannels = [
+    createWecomChatChannel(),
+    createFeishuChatChannel(),
+    createDingtalkChatChannel(),
+    createSlackChatChannel(),
+  ];
+  for (const channel of platformChannels) {
+    chatChannels[channel.channelId] = channel;
+  }
+  // 启动时恢复已持久化且 enabled 的通道 webhook（管理 API 保存时会再次同步）
+  for (const saved of await chatChannelStore.list()) {
+    const registered = chatChannels[saved.channelId];
+    if (saved.enabled && saved.webhookUrl && registered instanceof HttpChatChannel) {
+      registered.setWebhook(saved.webhookUrl, saved.token);
+    }
+  }
+
   // Surface 抽象层：内置 openwork-chat surface，作为统一聊天抽象对外暴露
   const surfaceRegistry = createSurfaceRegistry();
   const openWorkChatSurface = new OpenWorkChatSurface({
@@ -2229,6 +2261,7 @@ function createRoutes(
   registerAgentRuntimeRoutes({ routes, registry: runtimeRegistry, jsonResponse });
   registerWorktreeRoutes({ routes, service: worktreeService, jsonResponse, readJsonBody });
   registerChatRoutes({ routes, channels: chatChannels, relay: chatRelay, jsonResponse, readJsonBody });
+  registerChatChannelsRoutes({ routes, store: chatChannelStore, channels: chatChannels, relay: chatRelay, jsonResponse, readJsonBody });
   registerTrajectoryRoutes({
     routes,
     config,
@@ -2239,6 +2272,7 @@ function createRoutes(
 
   registerTeamRoutes({ routes, jsonResponse, readJsonBody });
   registerAgentRoutes({ routes, jsonResponse, readJsonBody });
+  registerExpertRoutes({ routes, jsonResponse, readJsonBody });
 
   registerSessionRoutes({
     routes,
@@ -2254,6 +2288,49 @@ function createRoutes(
     resolveWorkspaceWithoutBootstrap,
     createWorkspaceOpencodeClient,
     unwrapOpencodeResult,
+  });
+
+  // Relay Sync（接力同步）：云上/云下项目与上下文同步接力的 REST API。
+  registerRelaySyncRoutes({
+    routes,
+    config,
+    jsonResponse,
+    readJsonBody,
+    ensureWritable,
+    requireClientScope,
+    parseOptionalNonNegativeInteger,
+    createWorkspaceOpencodeClient,
+    resolveWorkspace,
+    unwrapOpencodeResult,
+  });
+
+  registerDeviceRoutes({
+    routes,
+    config,
+    jsonResponse,
+    readJsonBody,
+    ensureWritable,
+    requireClientScope,
+  });
+
+  registerProjectRoutes({
+    routes,
+    config,
+    jsonResponse,
+    readJsonBody,
+    ensureWritable,
+    requireClientScope,
+    resolveWorkspace,
+  });
+
+  registerAutomationRoutes({
+    routes,
+    config,
+    jsonResponse,
+    readJsonBody,
+    ensureWritable,
+    requireClientScope,
+    resolveWorkspace,
   });
 
   registerSpaceRoutes({
@@ -3033,6 +3110,13 @@ function createRoutes(
     resolveOutboxEnabled,
     resolveInboxMaxBytes,
     scopeRank,
+  });
+
+  registerUsageRoutes({
+    routes,
+    config,
+    jsonResponse,
+    resolveWorkspace,
   });
 
   addRoute(routes, "GET", "/workspace/:id/plugins", "client", async (ctx) => {

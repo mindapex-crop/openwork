@@ -15,7 +15,7 @@ export default defineConfig({
           ...common,
           name: "pr",
           // Naming convention: *.slow.test.ts drives Electron/Den (the stack lane, run on demand); every other spec must be app-less.
-          include: ["specs/**/*.test.ts"],
+          include: ["specs/**/*.test.ts", "quality/**/*.test.ts"],
           exclude: ["**/*.slow.test.ts"],
         },
       },

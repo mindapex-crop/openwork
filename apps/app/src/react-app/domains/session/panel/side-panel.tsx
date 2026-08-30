@@ -3,6 +3,8 @@ import * as React from "react";
 import {
   ArrowLeft,
   ArrowRight,
+  FolderTree,
+  GitCompareArrows,
   Globe,
   Loader2,
   Plus,
@@ -34,6 +36,8 @@ import { useControlAction, type OpenworkControlAction } from "../../../shell/con
 import type { OpenTarget } from "../artifacts/open-target";
 import { useSidePanelTabs } from "./use-side-panel-tabs";
 import { handlePanelEscape, PanelEmpty } from "./panel-empty";
+import { ChangesPanel } from "./changes-panel";
+import { WorkspaceFilesPanel } from "./workspace-files-panel";
 import {
   computeBounds,
   getElectronBrowser,
@@ -51,6 +55,8 @@ type SidePanelProps = {
   onClose: () => void;
   onOpenExtensions?: () => void;
   onOpenVoice?: () => void;
+  /** 在产物面板中打开指定工作空间文件（供文件树/变更面板调用）。 */
+  onOpenFile?: (path: string) => void;
 };
 
 // HMR can remount this module without unmounting BrowserPanelContent, leaving
@@ -135,6 +141,10 @@ function SidePanelTab({ tab, active, onSelect, onClose }: SidePanelTabProps) {
             ) : (
               <Globe />
             )
+          ) : tab.type === "files" ? (
+            <FolderTree />
+          ) : tab.type === "changes" ? (
+            <GitCompareArrows />
           ) : (
             <ArtifactIcon type={tab.preview} />
           )}
@@ -408,6 +418,7 @@ export function SidePanel({
   onClose,
   onOpenExtensions,
   onOpenVoice,
+  onOpenFile,
 }: SidePanelProps) {
   const { tabs } = useSessionPanelState(sessionId);
   const activeTab = useActivePanelTab(sessionId);
@@ -664,6 +675,23 @@ export function SidePanel({
               workspaceId={workspaceId}
               workspaceRoot={workspaceRoot}
               isRemoteWorkspace={isRemoteWorkspace}
+              onClose={onClose}
+            />
+          </div>
+        ) : activeTab?.type === "files" && client && workspaceId ? (
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <WorkspaceFilesPanel
+              client={client}
+              workspaceId={workspaceId}
+              onOpenFile={(path) => onOpenFile?.(path)}
+              onClose={onClose}
+            />
+          </div>
+        ) : activeTab?.type === "changes" ? (
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <ChangesPanel
+              sessionId={sessionId}
+              onOpenFile={(path) => onOpenFile?.(path)}
               onClose={onClose}
             />
           </div>

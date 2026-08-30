@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Agent } from "@opencode-ai/sdk/v2/client";
-import { AppWindowMac, ArrowUp, Check, ChevronDown, ChevronRight, FileText, ListPlus, LoaderCircle, Paperclip, Plug, RefreshCw, Settings, Square, Terminal, X, Zap } from "lucide-react";
+import { AppWindowMac, ArrowUp, Bot, BookOpen, Check, ChevronDown, ChevronRight, FileCode, FileText, FolderOpen, GitBranch, ListPlus, LoaderCircle, Mic, Paperclip, Plug, Plus, RefreshCw, Settings, Shield, ShieldCheck, Square, Target, Terminal, TerminalSquare, Video, X, Zap } from "lucide-react";
 import fuzzysort from "fuzzysort";
 import { toast } from "@/components/ui/sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -15,7 +15,11 @@ import type { CloudImportedPlugin, CloudImportedPluginFile } from "@/app/cloud/i
 import type { ComposerAttachment, McpServerEntry, McpStatusMap, ModelOption, ModelRef, SkillCard, SlashCommandOption } from "@/app/types";
 import { isMacPlatform } from "@/app/utils";
 import { t } from "@/i18n";
+import { cn } from "@/lib/utils";
+import { TASK_MODE_OPTIONS, type TaskMode } from "../../chat/task-mode";
 import { isOpenWorkExtensionEnabled, isOpenWorkExtensionHidden, OPENWORK_EXTENSION_STATE_CHANGED } from "@/react-app/domains/settings/extension-state";
+import { IM_CONNECTOR_DEFINITIONS, useImConnectorStore } from "@/react-app/domains/settings/im-connector-store";
+import { useExpertsStore } from "@/react-app/domains/experts/experts-store";
 import { useDesktopRestriction } from "@/react-app/domains/cloud/desktop-config-provider";
 import { usePlatform } from "@/react-app/kernel/platform";
 import { resolveExtensionIconUrl } from "@/react-app/design-system/extension-icon-src";
@@ -32,21 +36,39 @@ import {
   type ComposerSlashCommandOption,
 } from "./slash-command";
 import { encodeConnectSkillToken } from "./connect-skill-token";
+import { useComposerCapabilityStore } from "./composer-capability-store";
+import { clearSessionGoal, useSessionGoalStore } from "./composer-goal-store";
+import { formatGoalProgress, type GoalStatus } from "./composer-goal";
+import { isScreenRecordingSupported } from "@/react-app/domains/capture";
 import { FILE_URL_RE, HTTP_URL_RE, type PastedTextChip } from "./pasted-text";
+import { QUICK_COMMAND_DEFINITIONS, useQuickCommandsStore } from "./composer-quick-commands";
+import { QuickActionButton } from "./composer-quick-action-button";
 import {
   getComposerActions,
   type ComposerContributionContext,
 } from "./composer-contributions";
 
-type MentionItem = {
+export type MentionItem = {
   id: string;
   kind: ComposerMentionKind;
   value: string;
   label: string;
+  description?: string;
 };
 
 type ToolMenuSettingsSection = "commands" | "skills" | "mcps" | "plugins" | "extensions";
-type ToolMenuSection = "agents" | "commands" | "skills" | "mcps" | "extensions" | `plugin:${string}`;
+type ToolMenuSection =
+  | "agents"
+  | "commands"
+  | "skills"
+  | "mcps"
+  | "extensions"
+  | "experts"
+  | "connectors"
+  | `plugin:${string}`;
+
+/** 「管理智能体 / 管理连接器」跳转目标（由宿主路由实现，composer 只负责触发）。 */
+export type CapabilityManagerKind = "experts" | "connectors";
 
 function isComposerExtensionAvailable(entry: McpDirectoryInfo) {
   const hasSessionSurface = entry.extensionManifest?.contributions?.some((contribution) =>
@@ -90,6 +112,8 @@ type ComposerProps = {
   /** True while the draft's attachments are being compressed/uploaded during a send; chips show a spinner overlay. */
   attachmentsUploading?: boolean;
   attachmentsDisabledReason: string | null;
+  /** Opens the screen recorder. Absent on surfaces that do not host one, so the menu item hides. */
+  onRecordScreen?: () => void;
   modelVariantLabel: string;
   modelVariant: string | null;
   modelBehaviorOptions?: { value: string | null; label: string }[];
@@ -112,6 +136,8 @@ type ComposerProps = {
   listImportedPlugins?: () => Promise<CloudImportedPlugin[]>;
   importedPlugins?: CloudImportedPlugin[];
   onOpenSettingsSection?: (section: ToolMenuSettingsSection) => void;
+  /** 跳转到智能体 / 连接器的管理页（WorkBuddy「管理连接器」对标）。 */
+  onOpenCapabilityManager?: (kind: CapabilityManagerKind) => void;
   recentFiles: string[];
   searchFiles: (query: string) => Promise<string[]>;
   onInsertMention: (kind: ComposerMentionKind, value: string) => void;
@@ -124,12 +150,32 @@ type ComposerProps = {
   onRemovePastedText: (id: string) => void;
   isRemoteWorkspace: boolean;
   isSandboxWorkspace: boolean;
+  /** Extra mention items (docs, git, terminal, rules) injected by the session surface via the mention provider. */
+  extraMentionItems?: MentionItem[];
   onUploadInboxFiles?: ((files: File[]) => void | Promise<unknown>) | null;
   draftScopeKey?: string;
   compactTopSpacing?: boolean;
   /** Render inline in a page (new-task hero): no sticky dock chrome or inner max-width, aligning with sibling content. */
   flush?: boolean;
   topAccessory?: ReactNode;
+  /** Ask / Plan / Craft 任务模式（WorkBuddy 输入区对标）；未传时隐藏模式切换。 */
+  taskMode?: TaskMode;
+  onTaskModeChange?: (mode: TaskMode) => void;
+  /** 当前工作空间（WorkBuddy "设置工作空间" 对标）。 */
+  workspaceLabel?: string;
+  workspaceOptions?: { id: string; label: string; active: boolean }[];
+  onWorkspaceSelect?: (workspaceId: string) => void;
+  onOpenCreateWorkspace?: () => void;
+  /** 权限模式（WorkBuddy "权限管理：默认权限 / 完全访问" 对标）。 */
+  permissionMode?: "manual" | "full";
+  onPermissionModeChange?: (mode: "manual" | "full") => void;
+  /** Auto mode toggle (WorkBuddy "Auto" 对标). */
+  autoMode?: boolean;
+  onAutoModeChange?: (auto: boolean) => void;
+  /** Voice input (WorkBuddy 麦克风图标 对标). */
+  voiceInputSupported?: boolean;
+  voiceInputActive?: boolean;
+  onVoiceInput?: () => void;
 };
 
 const FLUSH_PROMPT_EVENT = "openwork:flushPromptDraft";
@@ -167,6 +213,140 @@ function parseClipboardUriList(clipboard: DataTransfer) {
 
 function isImageAttachment(attachment: ComposerAttachment) {
   return attachment.kind === "image" || attachment.mimeType.startsWith("image/");
+}
+
+/** Ask / Plan / Craft 任务模式分段控件（WorkBuddy 输入区对标）。 */
+function TaskModeSelect({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: TaskMode;
+  onChange?: (mode: TaskMode) => void;
+  disabled?: boolean;
+}) {
+  if (!onChange) return null;
+  return (
+    <div className="flex h-7 items-center gap-0.5 rounded-full border border-border/70 bg-muted/40 p-0.5">
+      {TASK_MODE_OPTIONS.map((mode) => {
+        const ModeIcon = mode.icon;
+        const active = mode.value === value;
+        return (
+          <button
+            key={mode.value}
+            type="button"
+            title={mode.description}
+            aria-label={mode.label}
+            aria-pressed={active}
+            disabled={disabled}
+            onClick={() => onChange(mode.value)}
+            className={cn(
+              "inline-flex h-6 items-center gap-1 rounded-full px-2 text-[11px] font-medium transition-colors",
+              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50",
+              active
+                ? "bg-background text-foreground shadow-[0_1px_0_rgba(255,255,255,0.06)]"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <ModeIcon className="size-3" />
+            {mode.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 工作空间选择器（WorkBuddy "设置工作空间" 对标）：显示当前工作空间，点击切换或新建。 */
+function WorkspaceSelect({
+  label,
+  options,
+  onSelect,
+  onCreate,
+  disabled,
+}: {
+  label?: string;
+  options?: { id: string; label: string; active: boolean }[];
+  onSelect?: (workspaceId: string) => void;
+  onCreate?: () => void;
+  disabled?: boolean;
+}) {
+  if (!label && (!options || options.length === 0)) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            className="inline-flex h-9 max-h-9 max-w-[180px] items-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-gray-10 transition-colors hover:bg-gray-3 hover:text-gray-12 disabled:opacity-50"
+            disabled={disabled}
+            title={t("composer.workspace_label")}
+            aria-label={t("composer.workspace_label")}
+          >
+            <FolderOpen size={14} className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{label}</span>
+            <ChevronDown size={13} className="shrink-0" />
+          </button>
+        }
+      />
+      <DropdownMenuContent align="start" side="top" sideOffset={6} className="w-64">
+        <div className="border-b border-dls-border px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-gray-10">
+          {t("composer.workspace_label")}
+        </div>
+        <div className="max-h-64 overflow-y-auto p-1.5">
+          {(options ?? []).map((option) => (
+            <DropdownMenuItem
+              key={option.id}
+              disabled={option.active || disabled}
+              onClick={() => onSelect?.(option.id)}
+            >
+              <FolderOpen size={14} className="text-gray-9" />
+              <span className="min-w-0 flex-1 truncate">{option.label}</span>
+              {option.active ? <Check size={14} className="shrink-0 text-gray-10" /> : null}
+            </DropdownMenuItem>
+          ))}
+        </div>
+        <div className="border-t border-dls-border p-1.5">
+          <DropdownMenuItem onClick={onCreate} disabled={disabled}>
+            <Plus size={14} className="text-gray-9" />
+            <span className="min-w-0 flex-1 truncate">{t("workspace_list.add_workspace")}</span>
+          </DropdownMenuItem>
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** 权限模式开关（WorkBuddy "权限管理：默认权限 / 完全访问" 对标）。 */
+function PermissionModeToggle({
+  value,
+  onChange,
+  disabled,
+}: {
+  value?: "manual" | "full";
+  onChange?: (mode: "manual" | "full") => void;
+  disabled?: boolean;
+}) {
+  if (!onChange) return null;
+  const full = value === "full";
+  return (
+    <button
+      type="button"
+      className={`inline-flex h-9 max-h-9 items-center gap-1.5 rounded-md px-2 text-[12px] font-medium transition-colors disabled:opacity-50 ${
+        full
+          ? "bg-amber-3/60 text-amber-11 hover:bg-amber-4/60"
+          : "text-gray-10 hover:bg-gray-3 hover:text-gray-12"
+      }`}
+      onClick={() => onChange(full ? "manual" : "full")}
+      disabled={disabled}
+      title={full ? t("composer.permission_full_hint") : t("composer.permission_manual_hint")}
+      aria-label={full ? t("composer.permission_full") : t("composer.permission_manual")}
+      aria-pressed={full}
+    >
+      {full ? <ShieldCheck size={14} className="shrink-0" /> : <Shield size={14} className="shrink-0" />}
+      <span className="hidden sm:inline">{full ? t("composer.permission_full") : t("composer.permission_manual")}</span>
+    </button>
+  );
 }
 
 function formatMcpStatusLabel(status: McpServerStatus | undefined) {
@@ -212,6 +392,17 @@ function mcpStatusBadgeClass(status: McpServerStatus) {
       return "bg-gray-3 text-gray-11";
     default:
       return "bg-red-3 text-red-11";
+  }
+}
+
+function goalChipClass(status: GoalStatus) {
+  switch (status) {
+    case "complete":
+      return "bg-green-3 text-green-11";
+    case "blocked":
+      return "bg-amber-3 text-amber-11";
+    case "active":
+      return "bg-gray-2 text-gray-12";
   }
 }
 
@@ -296,6 +487,19 @@ export function ReactSessionComposer(props: ComposerProps) {
   const agentItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [dropzoneActive, setDropzoneActive] = useState(false);
   const toolMenuRef = useRef<HTMLDivElement | null>(null);
+  // WorkBuddy 对标：composer「+」菜单引用智能体 / 连接器。
+  const selectedExpertId = useComposerCapabilityStore((state) => state.expertId);
+  const selectedConnectorIds = useComposerCapabilityStore((state) => state.connectorIds);
+  const setCapabilityExpert = useComposerCapabilityStore((state) => state.setExpert);
+  const toggleCapabilityConnector = useComposerCapabilityStore((state) => state.toggleConnector);
+  const sessionGoal = useSessionGoalStore((state) =>
+    props.sessionId ? state.goals[props.sessionId] ?? null : null,
+  );
+  const activeQuickCommands = useQuickCommandsStore((state) => state.active);
+  const experts = useExpertsStore((state) => state.experts);
+  const fetchExperts = useExpertsStore((state) => state.fetchExperts);
+  const connectorStates = useImConnectorStore((state) => state.states);
+  const refreshConnectors = useImConnectorStore((state) => state.refresh);
   const editorRef = useRef<LexicalPromptEditorHandle | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
   // IME composition guard: while an IME composition is active, we must not
@@ -570,14 +774,22 @@ export function ReactSessionComposer(props: ComposerProps) {
     void Promise.all([props.listAgents(), props.searchFiles(mentionQuery), listRunningAppsForMention()]).then(([agentList, files, apps]) => {
       if (cancelled) return;
       const recent = props.recentFiles.slice(0, 8);
+      const codeItems = recent.map((file) => ({ id: `code:${file}`, kind: "code" as const, value: file, label: file.split(/[\\/]/).pop() || file, description: file }));
+      const fileItems = [
+        ...recent.map((file) => ({ id: `file:${file}`, kind: "file" as const, value: file, label: file })),
+        ...files.filter((file) => !recent.includes(file)).map((file) => ({ id: `file:${file}`, kind: "file" as const, value: file, label: file })),
+      ];
       const next: MentionItem[] = [
         ...agentList.map((agent) => ({ id: `agent:${agent.name}`, kind: "agent" as const, value: agent.name, label: agent.name })),
-        ...recent.map((file) => ({ id: `file:${file}`, kind: "file" as const, value: file, label: file })),
-        // Running macOS apps (Computer Use targets). Listed after recent files
-        // so an empty "@" stays file-first; fuzzy search surfaces them as the
-        // user types (e.g. "@mus" → Music).
+        // Code snippets (recent files) — offered alongside plain file refs.
+        ...codeItems,
+        ...fileItems,
+        // Running macOS apps (Computer Use targets). Listed after files so an
+        // empty "@" stays file-first; fuzzy search surfaces them as the user
+        // types (e.g. "@mus" → Music).
         ...apps.map((appName) => ({ id: `app:${appName}`, kind: "app" as const, value: appName, label: appName })),
-        ...files.filter((file) => !recent.includes(file)).map((file) => ({ id: `file:${file}`, kind: "file" as const, value: file, label: file })),
+        // Enhanced mention types (docs, git, terminal, rules) from the provider.
+        ...props.extraMentionItems ?? [],
       ];
       setMentionItems(next);
     }).catch(() => {
@@ -586,7 +798,7 @@ export function ReactSessionComposer(props: ComposerProps) {
     return () => {
       cancelled = true;
     };
-  }, [mentionOpen, mentionQuery, props.listAgents, props.recentFiles, props.searchFiles]);
+  }, [mentionOpen, mentionQuery, props.listAgents, props.recentFiles, props.searchFiles, props.extraMentionItems]);
 
   useEffect(() => {
     if (!toolMenuOpen) return;
@@ -706,9 +918,34 @@ export function ReactSessionComposer(props: ComposerProps) {
     return undefined;
   }, [loadSkills, slashOpen, toolMenuOpen, toolMenuSection]);
 
+  // 智能体 / 连接器清单按段落懒加载：只在对应段落首次展开时拉一次。
+  const capabilityLoadRef = useRef({ experts: false, connectors: false });
+  useEffect(() => {
+    if (!toolMenuOpen) return;
+    if (toolMenuSection === "experts" && !capabilityLoadRef.current.experts) {
+      capabilityLoadRef.current.experts = true;
+      void fetchExperts();
+    }
+    if (toolMenuSection === "connectors" && !capabilityLoadRef.current.connectors) {
+      capabilityLoadRef.current.connectors = true;
+      void refreshConnectors();
+    }
+  }, [toolMenuOpen, toolMenuSection, fetchExperts, refreshConnectors]);
+
+  const selectedExpert = selectedExpertId
+    ? experts.find((expert) => expert.id === selectedExpertId) ?? null
+    : null;
+  const selectedConnectors = IM_CONNECTOR_DEFINITIONS.filter((definition) =>
+    selectedConnectorIds.includes(definition.id),
+  );
+
+  const builtinGoalCommand = useMemo<ComposerSlashCommandOption>(
+    () => ({ id: "builtin-goal", name: "goal", description: t("composer.goal_slash_desc"), source: "command" }),
+    [],
+  );
   const slashItems = useMemo<ComposerSlashCommandOption[]>(
-    () => [...commands, ...connectSkillSlashCommandOptions(skills)],
-    [commands, skills],
+    () => [builtinGoalCommand, ...commands, ...connectSkillSlashCommandOptions(skills)],
+    [builtinGoalCommand, commands, skills],
   );
   const slashFiltered = useMemo(() => {
     if (!slashOpen) return [];
@@ -733,7 +970,10 @@ export function ReactSessionComposer(props: ComposerProps) {
 
   const activeMenu = slashOpen ? "slash" : mentionOpen ? "mention" : null;
   const activeItems = activeMenu === "slash" ? slashFiltered : activeMenu === "mention" ? mentionFiltered : [];
-  const toolCommandItems = commands.filter((command) => !command.source || command.source === "command");
+  const toolCommandItems = useMemo(
+    () => [builtinGoalCommand, ...commands.filter((command) => !command.source || command.source === "command")],
+    [builtinGoalCommand, commands],
+  );
   const toolSkillItems = commands.filter((command) => command.source === "skill");
   const toolMcpItems = commands.filter((command) => command.source === "mcp");
   void toolMcpItems;
@@ -1135,6 +1375,49 @@ export function ReactSessionComposer(props: ComposerProps) {
     );
   };
 
+  const renderMentionIcon = (kind: ComposerMentionKind) => {
+    const cls = "mt-0.5 shrink-0 text-gray-9";
+    switch (kind) {
+      case "agent":
+        return <Zap size={14} className={cls} />;
+      case "app":
+        return <AppWindowMac size={14} className={cls} />;
+      case "code":
+        return <FileCode size={14} className={cls} />;
+      case "docs":
+        return <BookOpen size={14} className={cls} />;
+      case "git":
+        return <GitBranch size={14} className={cls} />;
+      case "terminal":
+        return <TerminalSquare size={14} className={cls} />;
+      case "rules":
+        return <ShieldCheck size={14} className={cls} />;
+      default:
+        return <FileText size={14} className={cls} />;
+    }
+  };
+
+  const renderMentionKindLabel = (kind: ComposerMentionKind) => {
+    switch (kind) {
+      case "agent":
+        return t("composer.agent_label");
+      case "app":
+        return t("composer.app_kind");
+      case "code":
+        return t("composer.code_kind");
+      case "docs":
+        return t("composer.docs_kind");
+      case "git":
+        return t("composer.git_kind");
+      case "terminal":
+        return t("composer.terminal_kind");
+      case "rules":
+        return t("composer.rules_kind");
+      default:
+        return t("composer.file_kind");
+    }
+  };
+
   const renderMentionMenu = () => {
     if (!mentionOpen || mentionFiltered.length === 0) return null;
     return (
@@ -1160,21 +1443,11 @@ export function ReactSessionComposer(props: ComposerProps) {
                     setMentionOpen(false);
                   }}
                 >
-                  {item.kind === "agent" ? (
-                    <Zap size={14} className="mt-0.5 shrink-0 text-gray-9" />
-                  ) : item.kind === "app" ? (
-                    <AppWindowMac size={14} className="mt-0.5 shrink-0 text-gray-9" />
-                  ) : (
-                    <FileText size={14} className="mt-0.5 shrink-0 text-gray-9" />
-                  )}
+                  {renderMentionIcon(item.kind)}
                   <div className="min-w-0">
                     <div className="truncate text-xs font-semibold">@{item.label}</div>
                     <div className="truncate text-xs text-gray-10">
-                      {item.kind === "agent"
-                        ? t("composer.agent_label")
-                        : item.kind === "app"
-                          ? t("composer.app_kind")
-                          : t("composer.file_kind")}
+                      {item.description ?? renderMentionKindLabel(item.kind)}
                     </div>
                   </div>
                 </button>
@@ -1343,20 +1616,6 @@ export function ReactSessionComposer(props: ComposerProps) {
                     event.currentTarget.value = "";
                   }}
                 />
-                <button
-                  type="button"
-                  className={`inline-flex h-9 max-h-9 w-9 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-gray-3 max-lg:h-11 max-lg:max-h-11 max-lg:w-11 ${
-                    !props.attachmentsEnabled ? "cursor-not-allowed opacity-60" : ""
-                  }`}
-                  onClick={() => {
-                    if (!props.attachmentsEnabled) return;
-                    fileInput?.click();
-                  }}
-                  disabled={!props.attachmentsEnabled}
-                  title={props.attachmentsDisabledReason ?? t("composer.attach_files")}
-                >
-                  <Paperclip size={16} />
-                </button>
                 <div
                   ref={toolMenuRef}
                   className="relative"
@@ -1367,7 +1626,7 @@ export function ReactSessionComposer(props: ComposerProps) {
                 >
                   <button
                     type="button"
-                    className={`inline-flex h-9 max-h-9 w-9 items-center justify-center rounded-md transition-colors max-lg:h-11 max-lg:max-h-11 max-lg:w-11 ${toolMenuOpen ? "bg-gray-3 text-gray-12" : "text-gray-10 hover:bg-gray-3"}`}
+                    className={`inline-flex h-9 max-h-9 w-9 items-center justify-center rounded-full transition-colors max-lg:h-11 max-lg:max-h-11 max-lg:w-11 ${toolMenuOpen ? "bg-gray-3 text-gray-12" : "text-gray-10 hover:bg-gray-3"}`}
                     onClick={() => {
                       setMentionOpen(false);
                       setMentionItems([]);
@@ -1376,19 +1635,53 @@ export function ReactSessionComposer(props: ComposerProps) {
                     }}
                     aria-expanded={toolMenuOpen}
                     aria-haspopup="dialog"
-                    title={t("composer.tools_label")}
+                    title={t("composer.add_label")}
                   >
-                    <Plug size={16} />
+                    <Plus size={16} />
                   </button>
                   {toolMenuOpen ? (
                     <div className="absolute bottom-full left-0 z-40 mb-3 w-[min(calc(100vw-2.5rem),34rem)] overflow-hidden rounded-[22px] border border-dls-border bg-dls-surface shadow-[var(--dls-shell-shadow)]">
                       <div className="grid grid-cols-[152px_minmax(0,1fr)] sm:grid-cols-[176px_minmax(0,1fr)]">
                         <div className="border-r border-dls-border bg-gray-2/30 p-2">
+                          <button
+                            type="button"
+                            className={`mb-1 flex w-full items-center gap-2 rounded-[16px] px-3 py-2.5 text-left text-sm transition-colors ${
+                              props.attachmentsEnabled ? "text-gray-11 hover:bg-gray-2" : "cursor-not-allowed text-gray-9 opacity-60"
+                            }`}
+                            onClick={() => {
+                              if (!props.attachmentsEnabled) return;
+                              setToolMenuOpen(false);
+                              fileInput?.click();
+                            }}
+                            disabled={!props.attachmentsEnabled}
+                            title={props.attachmentsDisabledReason ?? t("composer.attach_menu_item")}
+                          >
+                            <Paperclip size={14} className="shrink-0 text-gray-9" />
+                            <span className="truncate">{t("composer.attach_menu_item")}</span>
+                          </button>
+                          {props.onRecordScreen && isScreenRecordingSupported(navigator) ? (
+                            <button
+                              type="button"
+                              data-composer-record-screen
+                              className="mb-1 flex w-full items-center gap-2 rounded-[16px] px-3 py-2.5 text-left text-sm text-gray-11 transition-colors hover:bg-gray-2"
+                              onClick={() => {
+                                setToolMenuOpen(false);
+                                props.onRecordScreen?.();
+                              }}
+                              title={t("composer.record_screen_hint")}
+                            >
+                              <Video size={14} className="shrink-0 text-gray-9" />
+                              <span className="truncate">{t("composer.record_screen")}</span>
+                            </button>
+                          ) : null}
+                          <div className="my-2 border-t border-dls-border" />
                           {([
-                            ["agents", t("composer.agents_label")],
-                            ["commands", t("dashboard.commands")],
+                            ["experts", t("composer.experts_label")],
                             ["skills", t("dashboard.skills")],
-                            ["extensions", "Library"],
+                            ["connectors", t("composer.connectors_label")],
+                            ["commands", t("dashboard.commands")],
+                            ["extensions", t("composer.library_label")],
+                            ["agents", t("composer.agents_label")],
                           ] as const).map(([section, label]) => (
                             <button
                               key={section}
@@ -1414,19 +1707,119 @@ export function ReactSessionComposer(props: ComposerProps) {
                           ))}
                         </div>
                         <div className="max-h-72 overflow-y-auto p-2">
-                          <div className="mb-2 flex justify-end border-b border-dls-border px-1 pb-2">
-                            <button
-                              type="button"
-                              className="inline-flex items-center gap-1.5 rounded-full border border-dls-border px-3 py-1.5 text-[12px] font-medium text-gray-11 transition-colors hover:bg-gray-2"
-                              onClick={() => {
-                                setToolMenuOpen(false);
-                                openToolMenuSettings();
-                              }}
-                            >
-                              <Settings size={12} />
-                              {t("composer.configure")}
-                            </button>
+                          <div className="mb-2 flex justify-end gap-2 border-b border-dls-border px-1 pb-2">
+                            {toolMenuSection === "experts" || toolMenuSection === "connectors" ? (
+                              <button
+                                type="button"
+                                data-capability-manager={toolMenuSection}
+                                className="inline-flex items-center gap-1.5 rounded-full border border-dls-border px-3 py-1.5 text-[12px] font-medium text-gray-11 transition-colors hover:bg-gray-2"
+                                onClick={() => {
+                                  setToolMenuOpen(false);
+                                  props.onOpenCapabilityManager?.(toolMenuSection);
+                                }}
+                              >
+                                <Settings size={12} />
+                                {toolMenuSection === "experts"
+                                  ? t("composer.manage_experts")
+                                  : t("composer.manage_connectors")}
+                              </button>
+                            ) : null}
+                            {toolMenuSection !== "experts" && toolMenuSection !== "connectors" ? (
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1.5 rounded-full border border-dls-border px-3 py-1.5 text-[12px] font-medium text-gray-11 transition-colors hover:bg-gray-2"
+                                onClick={() => {
+                                  setToolMenuOpen(false);
+                                  openToolMenuSettings();
+                                }}
+                              >
+                                <Settings size={12} />
+                                {t("composer.configure")}
+                              </button>
+                            ) : null}
                           </div>
+                          {toolMenuSection === "experts" ? (
+                            experts.length > 0 ? (
+                              <div className="grid gap-1" data-tool-menu-section="experts">
+                                {experts.map((expert) => {
+                                  const active = selectedExpertId === expert.id;
+                                  return (
+                                    <button
+                                      key={expert.id}
+                                      type="button"
+                                      data-expert-id={expert.id}
+                                      className={`flex w-full items-start gap-3 rounded-[16px] px-3 py-2.5 text-left transition-colors hover:bg-gray-2/70 ${active ? "bg-gray-2 text-gray-12" : "text-gray-11"}`}
+                                      onClick={() => {
+                                        setCapabilityExpert(active ? null : expert.id);
+                                        setToolMenuOpen(false);
+                                      }}
+                                    >
+                                      <Bot size={14} className="mt-0.5 shrink-0 text-gray-9" />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="truncate text-xs font-semibold text-gray-11">{expert.name}</div>
+                                        {expert.description ? <div className="truncate text-xs text-gray-10">{expert.description}</div> : null}
+                                        {expert.skills.length > 0 ? (
+                                          <div className="truncate text-[10px] text-gray-9">
+                                            {t("composer.expert_skill_count", { count: String(expert.skills.length) })}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                      {active ? <Check size={14} className="mt-0.5 shrink-0 text-gray-10" /> : null}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <div className="px-3 py-2 text-xs text-gray-10">{t("composer.no_experts")}</div>
+                            )
+                          ) : null}
+                          {toolMenuSection === "connectors" ? (
+                            <div className="grid gap-1" data-tool-menu-section="connectors">
+                              {IM_CONNECTOR_DEFINITIONS.map((definition) => {
+                                const state = connectorStates.find((entry) => entry.id === definition.id);
+                                const isConnected = state?.status === "connected";
+                                const selected = selectedConnectorIds.includes(definition.id);
+                                const Icon = definition.icon;
+                                return (
+                                  <button
+                                    key={definition.id}
+                                    type="button"
+                                    data-connector-id={definition.id}
+                                    disabled={!isConnected}
+                                    title={isConnected ? undefined : t("composer.connector_not_connected")}
+                                    className={`flex w-full items-start gap-3 rounded-[16px] px-3 py-2.5 text-left transition-colors ${
+                                      isConnected ? "hover:bg-gray-2/70" : "cursor-not-allowed opacity-55"
+                                    } ${selected && isConnected ? "bg-gray-2 text-gray-12" : "text-gray-11"}`}
+                                    onClick={() => {
+                                      if (!isConnected) return;
+                                      toggleCapabilityConnector(definition.id);
+                                    }}
+                                  >
+                                    <Icon className="mt-0.5 size-3.5 shrink-0 text-gray-9" />
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center justify-between gap-3">
+                                        <div className="min-w-0 flex-1 truncate text-xs font-semibold text-gray-11">{definition.name}</div>
+                                        <span
+                                          className={cn(
+                                            "size-1.5 shrink-0 rounded-full",
+                                            state?.status === "connected"
+                                              ? "bg-emerald-500"
+                                              : state?.status === "connecting"
+                                                ? "bg-amber-500"
+                                                : "bg-muted-foreground",
+                                          )}
+                                        />
+                                      </div>
+                                      <div className="truncate text-[10px] text-gray-9">
+                                        {isConnected ? t("composer.connector_connected") : t("composer.connector_not_connected")}
+                                      </div>
+                                    </div>
+                                    {selected && isConnected ? <Check size={14} className="mt-0.5 shrink-0 text-gray-10" /> : null}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
                           {toolMenuSection === "agents" ? (
                             <div className="grid gap-1">
                               <button
@@ -1696,6 +2089,20 @@ export function ReactSessionComposer(props: ComposerProps) {
                   ) : null}
                 </div>
 
+                <WorkspaceSelect
+                  label={props.workspaceLabel}
+                  options={props.workspaceOptions}
+                  onSelect={props.onWorkspaceSelect}
+                  onCreate={props.onOpenCreateWorkspace}
+                  disabled={props.steering}
+                />
+
+                <PermissionModeToggle
+                  value={props.permissionMode}
+                  onChange={props.onPermissionModeChange}
+                  disabled={props.steering}
+                />
+
                 <ModelSelect
                   open={props.modelPickerOpen}
                   value={props.selectedModel}
@@ -1745,6 +2152,11 @@ export function ReactSessionComposer(props: ComposerProps) {
                 />
               </div>
 
+              <div
+                aria-hidden="true"
+                className="mx-1 h-6 w-px shrink-0 bg-dls-border max-lg:hidden"
+              />
+
               {/*
                 Action area.
                 - Idle: single "Run task" button (sends immediately).
@@ -1757,6 +2169,28 @@ export function ReactSessionComposer(props: ComposerProps) {
                   Escape arms a "Hit Escape again to stop the agent" prompt.
               */}
               <div className="ml-auto flex shrink-0 items-end gap-1.5 max-lg:w-full max-lg:justify-end">
+                {/* Inline voice input - WorkBuddy-style */}
+                {props.voiceInputSupported ? (
+                  <button
+                    type="button"
+                    onClick={props.onVoiceInput}
+                    className={`inline-flex h-9 max-h-9 w-9 items-center justify-center rounded-full border transition-colors max-lg:h-11 max-lg:max-h-11 ${
+                      props.voiceInputActive
+                        ? "border-red-4 bg-red-2 text-red-11"
+                        : "border-dls-border bg-transparent text-gray-11 hover:bg-gray-3"
+                    }`}
+                    aria-label={t("composer.voice_input")}
+                    title={props.voiceInputActive ? t("composer.voice_input_listening") : t("composer.voice_input")}
+                  >
+                    <Mic size={14} />
+                  </button>
+                ) : null}
+
+                {/* Quick codex-style action toggles: loop / watch / site / record */}
+                {QUICK_COMMAND_DEFINITIONS.map((def) => (
+                  <QuickActionButton key={def.id} mode={def.id} />
+                ))}
+
                 {props.busy ? (
                   <>
                     {escapeArmed ? (
@@ -1832,15 +2266,15 @@ export function ReactSessionComposer(props: ComposerProps) {
                     type="button"
                     onClick={canSend && !props.submissionPreparing ? props.onSend : undefined}
                     disabled={props.disabled || !canSend || props.submissionPreparing}
-                    className={`inline-flex h-9 max-h-9 items-center gap-2 rounded-full px-4 text-[13px] font-medium transition-colors max-lg:h-11 max-lg:max-h-11 ${
+                    aria-label={props.submissionPreparing ? "Preparing connected service tools…" : t("composer.run_task")}
+                    title={props.submissionPreparing ? "Preparing connected service tools…" : t("composer.run_task")}
+                    className={`inline-flex h-9 w-9 max-h-9 items-center justify-center rounded-full transition-colors max-lg:h-11 max-lg:w-11 max-lg:max-h-11 ${
                       !canSend || props.disabled || props.submissionPreparing
                         ? "bg-gray-4 text-gray-10"
                         : "bg-[var(--dls-accent)] text-[var(--dls-accent-fg)] hover:bg-[var(--dls-accent-hover)]"
                     }`}
-                    title={props.submissionPreparing ? "Preparing connected service tools…" : t("composer.run_task")}
                   >
-                    {props.submissionPreparing ? <LoaderCircle size={15} className="animate-spin" /> : <ArrowUp size={15} />}
-                    <span>{props.submissionPreparing ? "Preparing connected service tools…" : t("composer.run_task")}</span>
+                    {props.submissionPreparing ? <LoaderCircle size={16} className="animate-spin" /> : <ArrowUp size={16} />}
                   </button>
                 )}
               </div>
@@ -1848,6 +2282,85 @@ export function ReactSessionComposer(props: ComposerProps) {
           </div>
         </div>
 
+        {/* WorkBuddy 对标：已引用的智能体 / 连接器以芯片展示——hero 与会话内都要显示，
+            因为它描述的是「这条提示词会带上什么」，而非页面提示。 */}
+        {selectedExpertId || selectedConnectorIds.length > 0 || sessionGoal || Object.values(activeQuickCommands).some(Boolean) ? (
+          <div
+            className="mt-2 flex flex-wrap items-center gap-1.5"
+            data-composer-capability-chips
+          >
+            {sessionGoal ? (
+              <button
+                type="button"
+                data-capability-chip="goal"
+                data-goal-status={sessionGoal.status}
+                className={cn(
+                  "inline-flex max-w-full items-center gap-1.5 rounded-full border border-dls-border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                  goalChipClass(sessionGoal.status),
+                  "hover:bg-gray-3",
+                )}
+                onClick={() => props.sessionId && clearSessionGoal(props.sessionId)}
+                title={t("composer.goal_chip_title")}
+              >
+                <Target size={11} className="shrink-0" />
+                <span className="truncate">{sessionGoal.objective}</span>
+                <span className="shrink-0 tabular-nums opacity-70">{formatGoalProgress(sessionGoal)}</span>
+                <X size={11} className="shrink-0 text-gray-9" />
+              </button>
+            ) : null}
+            {QUICK_COMMAND_DEFINITIONS.map((def) => {
+              const isActive = activeQuickCommands[def.id];
+              if (!isActive) return null;
+              /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+              const IconComp = def.icon as React.ComponentType<{ className?: string; size?: number }>;
+              return (
+                <button
+                  key={def.id}
+                  type="button"
+                  data-capability-chip={`quick_cmd:${def.id}`}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50/60 px-2.5 py-1 text-[11px] font-medium text-blue-600 transition-colors hover:bg-blue-100 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-900/40"
+                  onClick={() => useQuickCommandsStore.getState().toggle(def.id)}
+                  title={t(def.labelKey)}
+                >
+                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                  {IconComp ? <IconComp size={11} /> : null}
+                  <span className="truncate">{t(def.labelKey)}</span>
+                  <X size={11} className="shrink-0 text-blue-400" />
+                </button>
+              );
+            })}
+            {selectedExpert ? (
+              <button
+                type="button"
+                data-capability-chip="expert"
+                className="inline-flex items-center gap-1.5 rounded-full border border-dls-border bg-gray-2 px-2.5 py-1 text-[11px] font-medium text-gray-12 transition-colors hover:bg-gray-3"
+                onClick={() => setCapabilityExpert(null)}
+                title={t("composer.remove_capability")}
+              >
+                <Bot size={11} className="shrink-0" />
+                <span className="truncate">{selectedExpert.name}</span>
+                <X size={11} className="shrink-0 text-gray-9" />
+              </button>
+            ) : null}
+            {selectedConnectors.map((definition) => {
+              const Icon = definition.icon;
+              return (
+                <button
+                  key={definition.id}
+                  type="button"
+                  data-capability-chip={definition.id}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-dls-border bg-gray-2 px-2.5 py-1 text-[11px] font-medium text-gray-12 transition-colors hover:bg-gray-3"
+                  onClick={() => toggleCapabilityConnector(definition.id)}
+                  title={t("composer.remove_capability")}
+                >
+                  <Icon className="size-3 shrink-0" />
+                  <span className="truncate">{definition.name}</span>
+                  <X size={11} className="shrink-0 text-gray-9" />
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
     </div>
   );

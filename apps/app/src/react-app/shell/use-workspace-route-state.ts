@@ -6,7 +6,7 @@
 // session-route.tsx as the final step of its decomposition; the route keeps
 // composition, handlers, and JSX.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import type { Session } from "@opencode-ai/sdk/v2/client";
 
 import {
@@ -115,9 +115,14 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
   const location = useLocation();
   const local = useLocal();
   const denAuth = useDenAuth();
-  const params = useParams<{ workspaceId?: string; sessionId?: string }>();
-  const routeWorkspaceId = params.workspaceId?.trim() || "";
-  const selectedSessionId = params.sessionId?.trim() || null;
+  // Parse workspace/session IDs from the URL directly. The session surface
+  // uses a single catch-all <Route> (so React keeps SessionRoute mounted
+  // across tab switches without remount flash), which means useParams() no
+  // longer extracts :workspaceId / :sessionId — we pull them from the path.
+  const workspaceRouteMatch = location.pathname.match(/^\/workspace\/([^/]+)\/session(?:\/([^/?#]*))?/);
+  const sessionOnlyMatch = workspaceRouteMatch ? null : location.pathname.match(/^\/session(?:\/([^/?#]*))?/);
+  const routeWorkspaceId = workspaceRouteMatch?.[1]?.trim() || "";
+  const selectedSessionId = (workspaceRouteMatch?.[2] ?? sessionOnlyMatch?.[1])?.trim() || null;
   const extensionsRouteActive = /^\/(?:workspace\/[^/]+\/)?extensions(?:\/|$)/.test(location.pathname);
   const extensionsRoutePath = extensionsRouteActive
     ? location.pathname
@@ -130,7 +135,11 @@ export function useWorkspaceRouteState(input: UseWorkspaceRouteStateInput) {
   // be normalized onto the selected workspace's session route. The session
   // route hosts them via `primarySlot`; a normalize here would yank the user
   // back to /workspace/:id/session right after they click Projects/Skills/etc.
-  const standaloneRouteActive = /^\/(?:projects|skills|knowledge|marketplace|collab-hub)(?:\/|$)/.test(location.pathname);
+  // Keep in sync with `SIDEBAR_NAV_ITEMS` in sidebar-nav.ts: every root-level
+  // standalone page (experts/inspiration/library/connectors/plans included)
+  // must be listed here or the route-normalize effect flashes the user back
+  // to the session view.
+  const standaloneRouteActive = /^\/(?:projects|skills|knowledge|marketplace|collab-hub|experts|inspiration|library|connectors|plans|automations)(?:\/|$)/.test(location.pathname);
   const navigateToWorkspaceSession = useCallback((workspaceId: string, sessionId?: string | null, options?: { replace?: boolean }) => {
     const id = workspaceId.trim();
     if (!id) {

@@ -31,6 +31,8 @@ import type {
   TeamEvent,
 } from "./types.js";
 import { runAgentPrompt } from "./agent-runner.js";
+import { topoSortAssignments } from "./scheduler.js";
+import { synthesizeResults, type SynthesisLlmExecutor } from "./synthesizer.js";
 
 /** 获取 agent 的 cwd（支持 worktree 隔离） */
 function getAgentCwd(team: AgentTeamHandle, agentId: string, baseCwd: string): string {
@@ -181,12 +183,16 @@ export async function* broadcastToAll(
 }
 
 /**
- * Fan-out: 任务分发
+ * Fan-out: 任务分发（按依赖拓扑执行）
  *
  * 每个 agent 处理不同的子任务（assignment: agentId → prompt）。
  * 借鉴 multica 的 task assignment：A 写代码、B 写测试、C 写文档。
  *
- * 并发执行所有 assignment，每个 subtask 独立追踪。
+ * v3 增强：支持 assignment.dependencies 依赖图调度。
+ * - 无依赖的子任务先执行（同一层内并发）
+ * - 依赖满足后再执行下游（层间串行）
+ * - 不传 dependencies 时所有子任务同一层并发（行为与 v2 一致）
+ * - 环上节点跳过并标记 subtask-failed
  */
 export async function* fanOut(
   team: AgentTeamHandle,
@@ -215,14 +221,46 @@ export async function* fanOut(
     }),
   );
 
-  // 并发执行每个 assignment
+  // 按依赖拓扑排序（无依赖 → 先执行；同层并发）
+  const plan = topoSortAssignments(
+    validAssignments.map((a) => ({
+      subtaskId: a.subtaskId,
+      agentId: a.agentId,
+      prompt: a.prompt,
+      dependencies: a.dependencies ?? [],
+    })),
+  );
+  const cycleIds = new Set(plan.cycles.flat());
+
   const results: Array<{ subtaskId: string; agentId: string; finalText: string | null; error?: string }> = [];
 
-  yield* raceAll(
-    input.assignments.map((a) =>
-      runFanOutAssignment(team, input.fanOutId, a, input.cwd, defaultTimeout, results),
-    ),
-  );
+  // 逐层执行：层内并发（raceAll），层间串行
+  for (const layer of plan.layers) {
+    yield* raceAll(
+      layer.map((a) =>
+        runFanOutAssignment(team, input.fanOutId, a, input.cwd, defaultTimeout, results),
+      ),
+    );
+  }
+
+  // 环上节点补发 subtask-failed（不执行）
+  for (const a of validAssignments) {
+    if (!cycleIds.has(a.subtaskId)) continue;
+    const error = `Subtask '${a.subtaskId}' skipped: dependency cycle detected (${plan.cycles.find((c) => c.includes(a.subtaskId))?.join(" → ")})`;
+    results.push({
+      subtaskId: a.subtaskId,
+      agentId: a.agentId,
+      finalText: null,
+      error,
+    });
+    yield {
+      kind: "subtask-failed",
+      fanOutId: input.fanOutId,
+      subtaskId: a.subtaskId,
+      agentId: a.agentId,
+      error,
+    };
+  }
 
   // 对未找到成员的 assignment 补发 subtask-failed
   for (const a of input.assignments) {
@@ -241,6 +279,98 @@ export async function* fanOut(
     fanOutId: input.fanOutId,
     results,
   };
+}
+
+/**
+ * Fan-out + 综合者：按依赖拓扑执行 fan-out，完成后对各 subtask 产出做 LLM 汇总。
+ *
+ * 事件流：保留 fanOut 全部事件（含 fanout-completed），最后追加：
+ * - synthesis-completed：综合成功（含 report）
+ * - synthesis-failed：综合失败（fan-out 结果不丢失）
+ *
+ * 综合 LLM 调用复用 team-llm-executor.ts 的 OpenCode client 模式：
+ * 调用方可传 llmExecutor（与 FunctionalSupervisor 同签名），或传自定义 synthesize 回调。
+ */
+export async function* fanOutWithSynthesis(
+  team: AgentTeamHandle,
+  input: FanOutInput,
+  options: {
+    /** 综合用的 providerID（透传到 LLM 调用） */
+    providerID: string;
+    /** 综合用的 modelID */
+    modelID: string;
+    /** 原始任务描述（综合报告的上下文） */
+    taskPrompt: string;
+    /** 自定义综合回调（测试/特殊场景可注入，缺省走 llmExecutor） */
+    synthesize?: (input: {
+      synthesisId: string;
+      taskPrompt: string;
+      results: Array<{ subtaskId: string; agentId: string; finalText: string | null; error?: string }>;
+      providerID: string;
+      modelID: string;
+    }) => Promise<{ report: string }>;
+    /** LLM executor（与 team-llm-executor.ts 同签名；synthesize 未提供时必填） */
+    llmExecutor?: SynthesisLlmExecutor;
+    /** 综合超时（毫秒） */
+    timeoutMs?: number;
+  },
+): AsyncGenerator<FanOutEvent> {
+  let finalResults: Array<{ subtaskId: string; agentId: string; finalText: string | null; error?: string }> | null = null;
+
+  // 1. 按依赖拓扑执行 fan-out（事件原样转发，记录最终结果）
+  for await (const ev of fanOut(team, input)) {
+    if (ev.kind === "fanout-completed") {
+      finalResults = ev.results;
+    }
+    yield ev;
+  }
+
+  // 2. 综合者：汇总各 subtask 产出
+  if (!finalResults) return;
+
+  const synthesisId = `${input.fanOutId}-synthesis`;
+  try {
+    let report: string;
+    if (options.synthesize) {
+      const outcome = await options.synthesize({
+        synthesisId,
+        taskPrompt: options.taskPrompt,
+        results: finalResults,
+        providerID: options.providerID,
+        modelID: options.modelID,
+      });
+      report = outcome.report;
+    } else if (options.llmExecutor) {
+      const outcome = await synthesizeResults(
+        {
+          synthesisId,
+          taskPrompt: options.taskPrompt,
+          results: finalResults,
+          providerID: options.providerID,
+          modelID: options.modelID,
+          timeoutMs: options.timeoutMs,
+        },
+        options.llmExecutor,
+      );
+      report = outcome.report;
+    } else {
+      throw new Error("fanOutWithSynthesis requires either synthesize or llmExecutor");
+    }
+
+    yield {
+      kind: "synthesis-completed",
+      fanOutId: input.fanOutId,
+      report,
+      providerID: options.providerID,
+      modelID: options.modelID,
+    };
+  } catch (err) {
+    yield {
+      kind: "synthesis-failed",
+      fanOutId: input.fanOutId,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 /** 单 agent 在 fan-out 中的执行 helper */

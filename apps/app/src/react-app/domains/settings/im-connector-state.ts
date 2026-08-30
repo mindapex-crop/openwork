@@ -75,6 +75,74 @@ export function connectedCount(states: ImConnectorState[]): number {
   return states.filter((s) => s.status === "connected").length;
 }
 
+// ============================================================
+// 服务端对接（阶段四：真实连接）
+// 后端 /api/chat-channels 返回的通道配置 → UI 状态映射
+// ============================================================
+
+/** 后端 /api/chat-channels 返回的通道配置结构 */
+export interface ServerChatChannelConfig {
+  channelId: ImConnectorPlatform;
+  webhookUrl: string;
+  token?: string;
+  enabled: boolean;
+  updatedAt: number;
+}
+
+/** 平台的 workspace 展示名（连接成功后显示） */
+export function platformWorkspaceLabel(id: ImConnectorPlatform): string {
+  return id === "feishu" ? "OpenWork 工作区" : "Demo Team";
+}
+
+/** 时间戳 → 与 completeConnect 一致的本地化短格式 */
+export function formatSyncTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * 从后端配置列表构建 UI 状态（保持五平台顺序；未配置/未启用的平台保持 disconnected）。
+ */
+export function statesFromServerConfigs(configs: ServerChatChannelConfig[]): ImConnectorState[] {
+  const byId = new Map(configs.map((c) => [c.channelId, c]));
+  return INITIAL_STATES.map((base) => {
+    const config = byId.get(base.id);
+    if (!config?.enabled) return { ...base };
+    return {
+      ...base,
+      status: "connected",
+      workspace: platformWorkspaceLabel(base.id),
+      botName: "OpenWork Bot",
+      lastSyncAt: formatSyncTime(config.updatedAt),
+    };
+  });
+}
+
+/**
+ * 连接成功（后端已保存配置）后，把目标平台 connecting → connected。
+ * 仅允许 connecting → connected；其余平台保持不变。
+ */
+export function completeConnectFromConfig(
+  states: ImConnectorState[],
+  id: ImConnectorPlatform,
+  config: ServerChatChannelConfig,
+): ImConnectorState[] {
+  return states.map((s) => {
+    if (s.id !== id || s.status !== "connecting") return s;
+    return {
+      ...s,
+      status: "connected",
+      workspace: platformWorkspaceLabel(id),
+      botName: "OpenWork Bot",
+      lastSyncAt: formatSyncTime(config.updatedAt),
+    };
+  });
+}
+
 import { t } from "@/i18n";
 
 /** Human-readable status label. */

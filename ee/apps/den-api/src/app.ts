@@ -37,6 +37,8 @@ import { resolveMcpMemberIdentity } from "./mcp/external-capabilities.js"
 import { DEN_MCP_REQUESTED_SCOPES } from "./mcp/scopes.js"
 import { codemodeScriptsEnabled } from "./capability-sources/codemode-rollout.js"
 import { registerMeRoutes } from "./routes/me/index.js"
+import { registerDevicePairingRoutes } from "./routes/device-pairing.js"
+import { registerRelaySyncRoutes } from "./relay-sync/routes.js"
 import { registerOrgRoutes } from "./routes/org/index.js"
 // L3 plugin adapter seam — Team Autonomy routes:
 //   Feature-flagged. TEAM_AUTONOMY_ENABLED=1 loads the plugin routes;
@@ -46,6 +48,8 @@ import { registerTelemetryRoutes } from "./routes/telemetry/index.js"
 import { registerVersionRoutes } from "./routes/version/index.js"
 import { registerWebhookRoutes } from "./routes/webhooks/index.js"
 import { registerWorkerRoutes } from "./routes/workers/index.js"
+import { registerSandboxRoutes } from "./routes/sandbox/index.js"
+import { registerCreditsRoutes } from "./routes/credits/index.js"
 import type { AuthContextVariables } from "./session.js"
 import { sessionMiddleware } from "./session.js"
 import { isOperationalErrorPath, normalizeOperationalErrorResponse, operationalErrorResponse } from "./operational-errors.js"
@@ -232,11 +236,15 @@ registerTeamAutonomyRoutes(
 registerVersionRoutes(app)
 registerWebhookRoutes(app)
 registerWorkerRoutes(app)
+registerSandboxRoutes(app)
+registerCreditsRoutes(app)
 registerMcpTokenRoutes(app)
 registerMcpRoutes(app)
 registerAgentMcpRoutes(app)
 registerAdminMcpRoutes(app)
 registerTelemetryRoutes(app)
+registerDevicePairingRoutes(app)
+registerRelaySyncRoutes(app)
 
 configureCloudAgentExecutor({ execute: executeCloudAgent, runtimeAvailable: cloudAgentRuntimeAvailable })
 

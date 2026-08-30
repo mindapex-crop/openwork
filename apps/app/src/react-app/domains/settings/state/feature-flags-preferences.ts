@@ -44,6 +44,18 @@ export function useFeatureFlagsPreferences() {
     }));
   }, [setPrefs]);
 
+  const mobileAccessEnabled = prefs.featureFlags?.mobileAccess === true;
+
+  const toggleMobileAccess = useCallback(() => {
+    setPrefs((previous) => ({
+      ...previous,
+      featureFlags: {
+        ...previous.featureFlags,
+        mobileAccess: !previous.featureFlags?.mobileAccess,
+      },
+    }));
+  }, [setPrefs]);
+
   return {
     microsandboxCreateSandboxEnabled,
     toggleMicrosandboxCreateSandbox,
@@ -51,6 +63,8 @@ export function useFeatureFlagsPreferences() {
     setContinuousEngine,
     memoryEnabled,
     toggleMemory,
+    mobileAccessEnabled,
+    toggleMobileAccess,
   };
 }
 

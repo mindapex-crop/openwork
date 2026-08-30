@@ -2,12 +2,14 @@
 import {
   ArrowRight,
   ArrowUpRight,
+  Cable,
   Cloud,
   Cog,
   FolderLock,
   LifeBuoy,
   MessageCircle,
   Paintbrush,
+  Puzzle,
   RefreshCcw,
   ShieldCheck,
   Sparkles,
@@ -33,8 +35,11 @@ type SettingsCardDefinition = { tab: SettingsTab; icon: typeof Sparkles } & (
 );
 
 const workspaceCards: SettingsCardDefinition[] = [
+  { tab: "connectors", icon: Cable, title: "Connectors", desc: "IM platforms (Feishu, Slack, WeChat Work, DingTalk, Discord)." },
+  { tab: "skills", icon: Sparkles, title: "Skills", desc: "Reusable prompts and procedures for the agent." },
   { tab: "preferences", icon: Cog, title: "Preferences", desc: "Default model, reasoning, and compaction." },
   { tab: "permissions", icon: FolderLock, title: "Permissions", desc: "Authorized folders and file access." },
+  { tab: "extensions", icon: Puzzle, title: "Library", desc: "Extensions, MCPs, plugins, and marketplace integrations." },
   { tab: "advanced", icon: Wrench, title: "Advanced", desc: "Runtime, engine, and developer options." },
 ];
 

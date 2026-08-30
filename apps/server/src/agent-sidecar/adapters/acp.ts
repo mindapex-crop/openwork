@@ -134,7 +134,12 @@ export class AcpSidecarAdapter extends BaseSidecarAdapter {
       const input = Writable.toWeb(this.child.stdin!) as unknown as WebWritable;
       const output = Readable.toWeb(this.child.stdout!) as unknown as WebReadable;
 
-      this.stream = acp.ndJsonStream(input, output);
+      this.stream = acp.ndJsonStream(
+        // 纯类型桥接：node:stream Writable.toWeb 的返回类型（undici stream/web）
+        // 与 SDK 期望的 node:stream/web 类型在 TS 上不等价，运行时流对象相同
+        input as unknown as Parameters<typeof acp.ndJsonStream>[0],
+        output as unknown as Parameters<typeof acp.ndJsonStream>[1],
+      );
       this.clientConn = acp.client({ name: `openwork-sidecar-${this.config.agentId}` })
         .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
           // 默认选 allow_once（生产环境应该回写到 OpenWork 审批层）

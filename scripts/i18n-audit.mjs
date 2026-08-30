@@ -4,7 +4,7 @@
  *
  * Usage:
  *   node scripts/i18n-audit.mjs              # full audit (default, excludes --hardcoded, --prune, --sort)
- *   node scripts/i18n-audit.mjs --ci         # same as default but does not fail on missing non-en keys
+ *   node scripts/i18n-audit.mjs --ci         # same as --all; fails on any drift (missing keys, etc.)
  *   node scripts/i18n-audit.mjs --missing    # missing keys (in EN but not in locale)
  *   node scripts/i18n-audit.mjs --orphan     # orphan keys (in locale but not in EN)
  *   node scripts/i18n-audit.mjs --duplicates # duplicate keys in any locale
@@ -21,6 +21,14 @@
 import { readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
 import { join, basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  importedConstBindings,
+  parseExportedConst,
+  parseLocale,
+  extractKeys,
+  extractKeyValues,
+  findDuplicateKeys,
+} from "../evals/quality/scanners/i18n-scanner.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..");
@@ -47,61 +55,6 @@ const shouldRun = (...modes) => (isAll && !modes.some((m) => EXCLUDED_FROM_ALL.h
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function importedConstBindings(content, filePath) {
-  const bindings = new Map();
-  for (const match of content.matchAll(/import\s+\{([^}]+)\}\s+from\s+["'](\.[^"']+)["'];?/g)) {
-    const source = match[2].endsWith(".ts") ? match[2] : `${match[2]}.ts`;
-    const sourcePath = resolve(dirname(filePath), source);
-    for (const specifier of match[1].split(",")) {
-      const parts = specifier.trim().split(/\s+as\s+/);
-      const imported = parts[0]?.trim();
-      const local = parts[1]?.trim() ?? imported;
-      if (!imported || !local || imported.startsWith("type ")) continue;
-      bindings.set(local, { imported, sourcePath });
-    }
-  }
-  return bindings;
-}
-
-function parseExportedConst(filePath, exportName) {
-  const content = readFileSync(filePath, "utf-8");
-  const escapedName = exportName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = content.match(
-    new RegExp(`export\\s+const\\s+${escapedName}\\s*=\\s*\\{([\\s\\S]*?)\\}\\s+as\\s+const;`),
-  );
-  if (!match) throw new Error(`Could not parse imported const ${exportName} from ${filePath}`);
-  return new Function(`return {${match[1]}}`)();
-}
-
-/** Parse a locale .ts file into a JS object via eval. */
-function parseLocale(filePath) {
-  const content = readFileSync(filePath, "utf-8");
-  const match = content.match(/export default \{([\s\S]*?)\} as const;/);
-  if (!match) throw new Error(`Could not parse ${filePath}`);
-
-  const imported = importedConstBindings(content, filePath);
-  const spreadNames = [...match[1].matchAll(/\.\.\.([A-Za-z_$][\w$]*)/g)]
-    .map((spread) => spread[1]);
-  const bindings = new Map();
-  for (const name of spreadNames) {
-    const source = imported.get(name);
-    if (!source) continue;
-    bindings.set(name, parseExportedConst(source.sourcePath, source.imported));
-  }
-
-  return new Function(...bindings.keys(), `return {${match[1]}}`)(...bindings.values());
-}
-
-/** Extract translation keys from a locale .ts file (as a Set). */
-function extractKeys(filePath) {
-  return new Set(Object.keys(parseLocale(filePath)));
-}
-
-/** Extract key→value map from a locale .ts file. */
-function extractKeyValues(filePath) {
-  return new Map(Object.entries(parseLocale(filePath)));
-}
 
 /** Find all {placeholders} in a string. */
 function findPlaceholders(str) {
@@ -131,19 +84,6 @@ function groupByPrefix(keys) {
     groups.set(prefix, (groups.get(prefix) ?? 0) + 1);
   }
   return [...groups.entries()].sort((a, b) => b[1] - a[1]);
-}
-
-/** Find duplicate keys in a file (must use regex — JSON.parse dedupes silently). */
-function findDuplicates(filePath) {
-  const content = readFileSync(filePath, "utf-8");
-  const seen = new Map();
-  const dupes = [];
-  for (const match of content.matchAll(/^\s*"([^"]+)"\s*:/gm)) {
-    const key = match[1];
-    if (seen.has(key)) dupes.push(key);
-    else seen.set(key, true);
-  }
-  return dupes;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,7 +127,7 @@ if (shouldRun("--missing")) {
       console.log(`  ${locale}: ✓ no missing`);
     } else {
       console.log(`  ${locale}: ✗ ${missing.length} missing`);
-      if (!isCi) exitCode = 1;
+      exitCode = 1;
       if (mode !== "--summary") {
         for (const [prefix, count] of groupByPrefix(missing).slice(0, 15)) {
           console.log(`    ${String(count).padStart(4)}  ${prefix}.*`);
@@ -247,7 +187,7 @@ if (shouldRun("--duplicates")) {
   for (const locale of ["en", ...LOCALES]) {
     const file = join(LOCALES_DIR, `${locale}.ts`);
     if (!existsSync(file)) continue;
-    const dupes = findDuplicates(file);
+    const dupes = findDuplicateKeys(file);
     if (dupes.length === 0) {
       console.log(`  ${locale}: ✓ no duplicates`);
     } else {

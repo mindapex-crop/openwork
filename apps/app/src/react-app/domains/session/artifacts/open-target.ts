@@ -79,7 +79,7 @@ function extname(value: string) {
   return index >= 0 ? name.slice(index) : "";
 }
 
-function classifyOpenTarget(value: string, kind: OpenTargetKind): OpenTargetPreview {
+export function classifyOpenTarget(value: string, kind: OpenTargetKind): OpenTargetPreview {
   if (kind === "url") return "browser";
   const ext = extname(value);
   if ([".md", ".markdown", ".mdx"].includes(ext)) return "markdown";
@@ -368,4 +368,65 @@ export function deriveOpenTargets(messages: UIMessage[], options: DeriveOpenTarg
   return Array.from(targets.values())
     .filter(isArtifactTarget)
     .sort((left, right) => right.confidence - left.confidence);
+}
+
+// ---------------------------------------------------------------------------
+// 变更（文件修改记录）提取 —— WorkBuddy 右侧"变更"区对标
+// ---------------------------------------------------------------------------
+
+export type FileChangeAction = "create" | "edit" | "patch" | "delete";
+
+export type FileChange = {
+  id: string;
+  path: string;
+  action: FileChangeAction;
+  /** 单调递增序号（按消息/工具调用顺序），用于去重与排序，越大越新。 */
+  updatedAt: number;
+};
+
+const DELETE_TOOL_NAMES = new Set(["delete", "delete_file", "remove"]);
+const CREATE_TOOL_NAMES = new Set(["create", "create_file", "write", "write_file"]);
+
+function actionForWriteTool(toolName: string): FileChangeAction | null {
+  const name = normalizedToolName(toolName);
+  if (DELETE_TOOL_NAMES.has(name)) return "delete";
+  if (CREATE_TOOL_NAMES.has(name)) return "create";
+  if (name === "apply_patch" || name === "patch") return "patch";
+  if (name === "edit" || name === "edit_file" || name === "multi_edit" || name === "multiedit" || name === "str_replace_editor") {
+    return "edit";
+  }
+  return null;
+}
+
+/**
+ * 从会话消息中提取"文件修改记录"（write/edit/patch/delete 类工具调用），
+ * 同一文件多次修改按时间序保留最新一条，结果按修改顺序倒序。
+ */
+export function deriveFileChanges(messages: UIMessage[]): FileChange[] {
+  const byPath = new Map<string, FileChange>();
+  let sequence = 0;
+
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== "dynamic-tool") continue;
+      const action = actionForWriteTool(part.toolName);
+      if (!action) continue;
+      sequence += 1;
+
+      const paths = new Set<string>();
+      for (const value of collectFileMetadataValues(part.input)) paths.add(value);
+      for (const value of collectPatchFileValues(part.input)) paths.add(value);
+
+      for (const raw of paths) {
+        const path = normalizePath(raw).replace(/[.,;:]+$/, "");
+        if (!path) continue;
+        const existing = byPath.get(path);
+        if (!existing || sequence >= existing.updatedAt) {
+          byPath.set(path, { id: `change:${path}`, path, action, updatedAt: sequence });
+        }
+      }
+    }
+  }
+
+  return Array.from(byPath.values()).sort((left, right) => right.updatedAt - left.updatedAt);
 }

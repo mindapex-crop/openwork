@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "OpenWork Mobile",
+    "slug": "openwork-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "icon": null,
+    "splash": {
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ai.openwork.mobile"
+    },
+    "android": {
+      "edgeToEdgeEnabled": true,
+      "package": "ai.openwork.mobile"
+    }
+  }
+}

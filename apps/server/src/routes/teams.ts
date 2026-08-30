@@ -36,6 +36,7 @@ import {
   buildTeamConfigFromStrategy,
   type TeamStrategyId,
 } from "../agent-team/team-strategies.js";
+import { TeamStore, defaultTeamStorePath, type StoredTeam } from "./team-store.js";
 
 export interface RegisterTeamRoutesOptions {
   routes: Route[];
@@ -46,6 +47,8 @@ export interface RegisterTeamRoutesOptions {
   detectAgents?: () => Promise<AgentDetectResult[]>;
   /** 一键协作执行依赖（默认真实并行执行，测试可注入假实现，避免真实 spawn agent） */
   executePlan?: RunSimpleExecutor;
+  /** 团队持久化 sqlite 路径（测试可注入临时路径，缺省 OPENWORK_TEAMS_DB 或配置目录 teams.sqlite） */
+  teamStorePath?: string;
 }
 
 /** run-simple 单个子任务的执行结果（面向普通用户的简化结构） */
@@ -57,13 +60,22 @@ export interface CollabSubtaskResult {
   outputTail?: string;
 }
 
+/** 执行过程中单个子任务的实时状态（终态之前也会落盘，供轮询查看） */
+export interface CollabSubtaskProgress {
+  subtaskId: string;
+  status: "running" | "completed" | "failed";
+  outputTail?: string;
+}
+
 /** run-simple 执行计划的输入 */
 export interface RunSimpleExecutionInput {
   teamId: string;
   taskId: string;
   prompt: string;
   subtasks: Array<{ subtaskId: string; agentId: string; prompt: string; dependencies: string[] }>;
-  memberSpecs: Array<{ agentId: string; role?: MemberRole }>;
+  memberSpecs: Array<{ agentId: string; role?: string }>;
+  /** 子任务状态变化回调：路由据此实时落盘，GET /teams/:id/tasks 才轮询得到进度 */
+  onProgress?: (progress: CollabSubtaskProgress) => void;
 }
 
 /** run-simple 执行计划的输出 */
@@ -76,24 +88,10 @@ export interface RunSimpleExecutionResult {
 /** 一键协作执行函数签名（可注入，便于测试不真实 spawn agent） */
 export type RunSimpleExecutor = (plan: RunSimpleExecutionInput) => Promise<RunSimpleExecutionResult>;
 
-/** 内存中的 team 存储（简化实现，后续可对接数据库） */
-interface StoredTeam {
-  id: string;
-  name: string;
-  strategy: TeamStrategyId;
-  memberSpecs: Array<{ agentId: string; role?: string }>;
-  harnessId: string;
-  createdAt: number;
-  updatedAt: number;
-  status: "idle" | "running" | "completed" | "failed";
-  lastTaskResult?: {
-    taskId: string;
-    subtasks: Array<{ subtaskId: string; agentId: string; prompt: string; status: string }>;
-    completedAt: number;
-  };
-}
+export { type StoredTeam } from "./team-store.js";
 
-const teamStore = new Map<string, StoredTeam>();
+/** 执行中实时回写的任务快照（与持久化契约同源，含可选 outputTail） */
+type LiveTaskResult = NonNullable<StoredTeam["lastTaskResult"]>;
 
 function generateTeamId(): string {
   return `team_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -104,13 +102,102 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+/** 本机没有任何可用 CLI agent 时的统一提示（执行路径都依赖已安装的 agent） */
+const NO_AGENT_AVAILABLE_HINT =
+  "未检测到可用的 agent。请先安装任意支持的 CLI agent（如 opencode、kimi、claude-code、codex）后再试。";
+
+const MEMBER_ROLES: readonly MemberRole[] = [
+  "primary",
+  "reviewer",
+  "fallback",
+  "specialist",
+  "observer",
+  "synthesizer",
+];
+
+/** StoredTeam 里的 role 是自由字符串，交给内核前先收窄 */
+function toMemberRole(role: string | undefined): MemberRole | undefined {
+  return MEMBER_ROLES.find((candidate) => candidate === role);
+}
+
 export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
   const { routes, jsonResponse, readJsonBody, detectAgents, executePlan } = options;
 
+  // 团队持久化：sqlite（按路径缓存连接，同路径复用）
+  function getTeamStore(): Promise<TeamStore> {
+    return TeamStore.getOrOpen(options.teamStorePath ?? defaultTeamStorePath());
+  }
+
+  /**
+   * 真实执行一条团队任务：分解 → 落盘 running → 执行期间按子任务实时回写 →
+   * 折叠终态。run-simple 与 /teams/:id/run 共用这一条路径，两者的响应 shape 因此一致。
+   */
+  async function runTask(
+    store: TeamStore,
+    team: StoredTeam,
+    strategyId: TeamStrategyId,
+    taskPrompt: string,
+    memberSpecs: Array<{ agentId: string; role?: string }>,
+  ): Promise<RunSimpleExecutionResult & { taskId: string }> {
+    const subtasks = generateDecomposition(taskPrompt, memberSpecs, strategyId);
+    const taskId = `task_${Date.now().toString(36)}`;
+    const live: LiveTaskResult = {
+      taskId,
+      subtasks: subtasks.map((s) => ({
+        subtaskId: s.subtaskId,
+        agentId: s.agentId,
+        prompt: s.prompt,
+        status: "pending",
+      })),
+      completedAt: Date.now(),
+    };
+
+    team.status = "running";
+    team.updatedAt = Date.now();
+    team.lastTaskResult = live;
+    store.set(team);
+
+    const runner = executePlan ?? executeCollabPlan;
+    const result = await runner({
+      teamId: team.id,
+      taskId,
+      prompt: taskPrompt,
+      subtasks,
+      memberSpecs,
+      onProgress: (progress) => {
+        const row = live.subtasks.find((s) => s.subtaskId === progress.subtaskId);
+        if (!row) return;
+        row.status = progress.status;
+        if (progress.outputTail) row.outputTail = progress.outputTail;
+        team.updatedAt = Date.now();
+        store.set(team);
+      },
+    });
+
+    // 任一子任务失败不应使整体 500：失败情况已折叠进 subtaskResults + status
+    team.status = result.status === "failed" ? "failed" : "completed";
+    team.updatedAt = Date.now();
+    team.lastTaskResult = {
+      taskId,
+      subtasks: result.subtaskResults.map((s) => ({
+        subtaskId: s.subtaskId,
+        agentId: s.agentId,
+        prompt: s.prompt,
+        status: s.status,
+        ...(s.outputTail ? { outputTail: s.outputTail } : {}),
+      })),
+      completedAt: Date.now(),
+    };
+    store.set(team);
+
+    return { ...result, taskId };
+  }
+
   // ============ Team CRUD ============
 
-  addRoute(routes, "GET", "/teams", "none", async () => {
-    const teams = Array.from(teamStore.values()).map((t) => ({
+  addRoute(routes, "GET", "/teams", "client", async () => {
+    const store = await getTeamStore();
+    const teams = store.list().map((t) => ({
       id: t.id,
       name: t.name,
       strategy: t.strategy,
@@ -123,7 +210,7 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
     return jsonResponse({ teams });
   });
 
-  addRoute(routes, "POST", "/teams", "none", async (ctx) => {
+  addRoute(routes, "POST", "/teams", "client", async (ctx) => {
     const body = await readJsonBody(ctx.request);
     if (!body || typeof body !== "object") {
       return jsonResponse({ error: "invalid body" }, 400);
@@ -166,22 +253,25 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
       status: "idle",
     };
 
-    teamStore.set(teamId, team);
+    const store = await getTeamStore();
+    store.set(team);
     return jsonResponse({ team: serializeTeam(team) }, 201);
   });
 
-  addRoute(routes, "GET", "/teams/:id", "none", async (ctx) => {
+  addRoute(routes, "GET", "/teams/:id", "client", async (ctx) => {
     const teamId = ctx.params.id;
-    const team = teamStore.get(teamId);
+    const store = await getTeamStore();
+    const team = store.get(teamId);
     if (!team) {
       return jsonResponse({ error: "team not found" }, 404);
     }
     return jsonResponse({ team: serializeTeam(team) });
   });
 
-  addRoute(routes, "PUT", "/teams/:id", "none", async (ctx) => {
+  addRoute(routes, "PUT", "/teams/:id", "client", async (ctx) => {
     const teamId = ctx.params.id;
-    const team = teamStore.get(teamId);
+    const store = await getTeamStore();
+    const team = store.get(teamId);
     if (!team) {
       return jsonResponse({ error: "team not found" }, 404);
     }
@@ -215,12 +305,14 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
     }
     team.updatedAt = Date.now();
 
+    store.set(team);
     return jsonResponse({ team: serializeTeam(team) });
   });
 
-  addRoute(routes, "DELETE", "/teams/:id", "none", async (ctx) => {
+  addRoute(routes, "DELETE", "/teams/:id", "client", async (ctx) => {
     const teamId = ctx.params.id;
-    const removed = teamStore.delete(teamId);
+    const store = await getTeamStore();
+    const removed = store.delete(teamId);
     if (!removed) {
       return jsonResponse({ error: "team not found" }, 404);
     }
@@ -229,9 +321,10 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
 
   // ============ Team Member Management ============
 
-  addRoute(routes, "POST", "/teams/:id/members", "none", async (ctx) => {
+  addRoute(routes, "POST", "/teams/:id/members", "client", async (ctx) => {
     const teamId = ctx.params.id;
-    const team = teamStore.get(teamId);
+    const store = await getTeamStore();
+    const team = store.get(teamId);
     if (!team) {
       return jsonResponse({ error: "team not found" }, 404);
     }
@@ -253,13 +346,15 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
     team.memberSpecs.push({ agentId, role: role ?? "specialist" });
     team.updatedAt = Date.now();
 
+    store.set(team);
     return jsonResponse({ team: serializeTeam(team) }, 201);
   });
 
-  addRoute(routes, "DELETE", "/teams/:id/members/:agentId", "none", async (ctx) => {
+  addRoute(routes, "DELETE", "/teams/:id/members/:agentId", "client", async (ctx) => {
     const teamId = ctx.params.id;
     const agentId = ctx.params.agentId;
-    const team = teamStore.get(teamId);
+    const store = await getTeamStore();
+    const team = store.get(teamId);
     if (!team) {
       return jsonResponse({ error: "team not found" }, 404);
     }
@@ -272,12 +367,13 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
     team.memberSpecs.splice(idx, 1);
     team.updatedAt = Date.now();
 
+    store.set(team);
     return jsonResponse({ team: serializeTeam(team) });
   });
 
   // ============ 一键协作（简化用户入口，隐藏 CLI/agent/harness 概念）============
 
-  addRoute(routes, "POST", "/teams/run-simple", "none", async (ctx) => {
+  addRoute(routes, "POST", "/teams/run-simple", "client", async (ctx) => {
     const body = await readJsonBody(ctx.request);
     if (!body || typeof body !== "object") {
       return jsonResponse({ error: "invalid body" }, 400);
@@ -293,14 +389,7 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
     const available = (await detect()).filter((r) => r.available);
 
     if (available.length === 0) {
-      return jsonResponse(
-        {
-          error: "no_agent_available",
-          hint:
-            "未检测到可用的 agent。请先安装任意支持的 CLI agent（如 opencode、kimi、claude-code、codex）后再试。",
-        },
-        400,
-      );
+      return jsonResponse({ error: "no_agent_available", hint: NO_AGENT_AVAILABLE_HINT }, 400);
     }
 
     // 自动分配角色：主力 + 若干 specialist/reviewer
@@ -322,39 +411,14 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
       updatedAt: Date.now(),
       status: "idle",
     };
-    teamStore.set(teamId, team);
+    const store = await getTeamStore();
+    store.set(team);
 
-    // 复用 /teams/:id/run 的分解逻辑，然后真实并行执行（复用 agent-team 内核）
-    const taskPrompt = prompt.trim();
-    const subtasks = generateDecomposition(taskPrompt, memberSpecs, strategyId);
-    const taskId = `task_${Date.now().toString(36)}`;
-
-    const runner = executePlan ?? executeCollabPlan;
-    const result = await runner({
-      teamId,
-      taskId,
-      prompt: taskPrompt,
-      subtasks,
-      memberSpecs,
-    });
-
-    // 任一子任务失败不应使整体 500：失败情况已折叠进 subtaskResults + status
-    team.lastTaskResult = {
-      taskId,
-      subtasks: result.subtaskResults.map((s) => ({
-        subtaskId: s.subtaskId,
-        agentId: s.agentId,
-        prompt: s.prompt,
-        status: s.status,
-      })),
-      completedAt: Date.now(),
-    };
-    team.status = result.status === "failed" ? "failed" : "completed";
-    team.updatedAt = Date.now();
+    const result = await runTask(store, team, strategyId, prompt.trim(), memberSpecs);
 
     return jsonResponse({
       teamId,
-      taskId,
+      taskId: result.taskId,
       strategy: strategyId,
       status: result.status,
       subtaskResults: result.subtaskResults,
@@ -364,9 +428,10 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
 
   // ============ Team Task Execution ============
 
-  addRoute(routes, "POST", "/teams/:id/decompose", "none", async (ctx) => {
+  addRoute(routes, "POST", "/teams/:id/decompose", "client", async (ctx) => {
     const teamId = ctx.params.id;
-    const team = teamStore.get(teamId);
+    const store = await getTeamStore();
+    const team = store.get(teamId);
     if (!team) {
       return jsonResponse({ error: "team not found" }, 404);
     }
@@ -397,15 +462,15 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
       suggestedApproach: strategy.relayStrategy?.kind ?? "direct",
       // 基于策略和成员信息生成的预分解结果
       subtasks: generateDecomposition(taskPrompt, team.memberSpecs, strategyId),
-      estimatedCost: estimateCost(strategyId, team.memberSpecs.length),
     };
 
     return jsonResponse({ decomposition });
   });
 
-  addRoute(routes, "POST", "/teams/:id/run", "none", async (ctx) => {
+  addRoute(routes, "POST", "/teams/:id/run", "client", async (ctx) => {
     const teamId = ctx.params.id;
-    const team = teamStore.get(teamId);
+    const store = await getTeamStore();
+    const team = store.get(teamId);
     if (!team) {
       return jsonResponse({ error: "team not found" }, 404);
     }
@@ -426,9 +491,7 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
     }
 
     const strategyId = forceStrategy ?? team.strategy;
-    const strategy = getStrategyConfig(strategyId);
     const complexity = assessTaskComplexity(taskPrompt);
-    const subtasks = generateDecomposition(taskPrompt, team.memberSpecs, strategyId);
 
     if (dryRun) {
       return jsonResponse({
@@ -436,44 +499,35 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
         dryRun: true,
         strategy: strategyId,
         complexity,
-        subtasks,
-        estimatedCost: estimateCost(strategyId, team.memberSpecs.length),
+        subtasks: generateDecomposition(taskPrompt, team.memberSpecs, strategyId),
       });
     }
 
-    // 实际执行（当前版本返回分解计划，实际执行需要 CLI agent 运行时）
-    team.status = "running";
-    team.updatedAt = Date.now();
+    // 真实执行依赖本机已安装且可用的 CLI agent：团队里至少要有一个可用成员
+    const detect = detectAgents ?? detectAllAgents;
+    const usable = (await detect()).filter((r) => r.available);
+    const usableAgentIds = new Set(usable.map((r) => r.agentId));
+    const runnableSpecs = team.memberSpecs.filter((m) => usableAgentIds.has(m.agentId));
+    if (runnableSpecs.length === 0) {
+      return jsonResponse({ error: "no_agent_available", hint: NO_AGENT_AVAILABLE_HINT }, 400);
+    }
 
-    const taskResult = {
-      taskId: `task_${Date.now().toString(36)}`,
+    const result = await runTask(store, team, strategyId, taskPrompt.trim(), runnableSpecs);
+
+    return jsonResponse({
+      teamId,
+      taskId: result.taskId,
       strategy: strategyId,
-      complexity,
-      subtasks,
-      status: "planned" as const,
-      message: `Task decomposed into ${subtasks.length} subtasks. Ready for execution.`,
-      harnessId: team.harnessId,
-    };
-
-    team.lastTaskResult = {
-      taskId: taskResult.taskId,
-      subtasks: subtasks.map((s) => ({
-        subtaskId: s.subtaskId,
-        agentId: s.agentId,
-        prompt: s.prompt,
-        status: "pending",
-      })),
-      completedAt: Date.now(),
-    };
-    team.status = "idle";
-    team.updatedAt = Date.now();
-
-    return jsonResponse({ task: taskResult }, 202);
+      status: result.status,
+      subtaskResults: result.subtaskResults,
+      message: result.message,
+    });
   });
 
-  addRoute(routes, "GET", "/teams/:id/tasks", "none", async (ctx) => {
+  addRoute(routes, "GET", "/teams/:id/tasks", "client", async (ctx) => {
     const teamId = ctx.params.id;
-    const team = teamStore.get(teamId);
+    const store = await getTeamStore();
+    const team = store.get(teamId);
     if (!team) {
       return jsonResponse({ error: "team not found" }, 404);
     }
@@ -485,7 +539,7 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
 
   // ============ Strategy Routes ============
 
-  addRoute(routes, "GET", "/team-strategies", "none", async () => {
+  addRoute(routes, "GET", "/team-strategies", "client", async () => {
     const strategies = listStrategies().map((s) => ({
       id: s.id,
       name: s.meta.name,
@@ -499,7 +553,7 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
     return jsonResponse({ strategies });
   });
 
-  addRoute(routes, "GET", "/team-strategies/:id", "none", async (ctx) => {
+  addRoute(routes, "GET", "/team-strategies/:id", "client", async (ctx) => {
     try {
       const strategy = getStrategyConfig(ctx.params.id as TeamStrategyId);
       return jsonResponse({
@@ -524,13 +578,13 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
 
   // ============ Harness Routes ============
 
-  addRoute(routes, "GET", "/team-harnesses", "none", async () => {
+  addRoute(routes, "GET", "/team-harnesses", "client", async () => {
     const harnessManager = getGlobalHarnessManager();
     const harnesses = harnessManager.listHarnesses().map(serializeHarness);
     return jsonResponse({ harnesses });
   });
 
-  addRoute(routes, "POST", "/team-harnesses", "none", async (ctx) => {
+  addRoute(routes, "POST", "/team-harnesses", "client", async (ctx) => {
     const body = await readJsonBody(ctx.request);
     if (!body || typeof body !== "object") {
       return jsonResponse({ error: "invalid body" }, 400);
@@ -543,7 +597,7 @@ export function registerTeamRoutes(options: RegisterTeamRoutesOptions): void {
     return jsonResponse({ harness: serializeHarness(harness) }, 201);
   });
 
-  addRoute(routes, "POST", "/team-harnesses/:id/health", "none", async (ctx) => {
+  addRoute(routes, "POST", "/team-harnesses/:id/health", "client", async (ctx) => {
     const harnessManager = getGlobalHarnessManager();
     const health = await harnessManager.checkHealth(ctx.params.id);
     return jsonResponse({ harnessId: ctx.params.id, health });
@@ -716,20 +770,6 @@ function generateDecomposition(
   }
 }
 
-/** 估算成本（简化版） */
-function estimateCost(strategyId: TeamStrategyId, memberCount: number): { low: number; high: number } {
-  const perAgentCost = {
-    conservative: 0.5,
-    balanced: 2,
-    aggressive: 10,
-  };
-  const base = perAgentCost[strategyId] ?? 1;
-  return {
-    low: Math.round(base * memberCount * 0.5 * 100) / 100,
-    high: Math.round(base * memberCount * 2 * 100) / 100,
-  };
-}
-
 /**
  * run-simple 默认的真实执行器：复用 agent-team 内核（fan-out 并行执行各子任务）。
  *
@@ -745,7 +785,7 @@ async function executeCollabPlan(plan: RunSimpleExecutionInput): Promise<RunSimp
     members: plan.memberSpecs.map((m) => ({
       agentId: m.agentId,
       adapter: createAdapterForAgent(m.agentId),
-      role: m.role,
+      role: toMemberRole(m.role),
     })),
     dispatchPolicy: { kind: "round-robin" },
     eagerStart: false,
@@ -768,17 +808,32 @@ async function executeCollabPlan(plan: RunSimpleExecutionInput): Promise<RunSimp
         subtaskId: s.subtaskId,
         agentId: s.agentId,
         prompt: s.prompt,
+        dependencies: s.dependencies,
       })),
     })) {
+      if (ev.kind === "subtask-assigned") {
+        plan.onProgress?.({ subtaskId: ev.subtaskId, status: "running" });
+      }
+      if (ev.kind === "subtask-completed") {
+        plan.onProgress?.({
+          subtaskId: ev.subtaskId,
+          status: "completed",
+          ...(ev.finalText ? { outputTail: outputTail(ev.finalText) } : {}),
+        });
+      }
+      if (ev.kind === "subtask-failed") {
+        plan.onProgress?.({ subtaskId: ev.subtaskId, status: "failed", outputTail: outputTail(ev.error) });
+      }
       if (ev.kind === "fanout-completed") {
         for (const r of ev.results) {
           const prompt = plan.subtasks.find((s) => s.subtaskId === r.subtaskId)?.prompt ?? "";
+          const tail = r.finalText ?? r.error;
           subtaskResults.push({
             subtaskId: r.subtaskId,
             agentId: r.agentId,
             prompt,
             status: r.error ? "failed" : "completed",
-            ...(r.finalText ? { outputTail: outputTail(r.finalText) } : {}),
+            ...(tail ? { outputTail: outputTail(tail) } : {}),
           });
         }
       }

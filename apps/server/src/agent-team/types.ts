@@ -47,7 +47,8 @@ export type MemberRole =
   | "reviewer"     // 审查/校对
   | "fallback"     // 主力失败时启用
   | "specialist"   // 特定领域专家（capability-match 时启用）
-  | "observer";    // 只读，仅广播模式下参与
+  | "observer"     // 只读，仅广播模式下参与
+  | "synthesizer"; // 综合者：fan-out 完成后汇总各子任务产出为综合报告
 
 /** 团队成员 */
 export interface AgentTeamMember {
@@ -169,6 +170,8 @@ export interface FanOutAssignment {
   agentId: string;
   /** 该 agent 收到的 prompt */
   prompt: string;
+  /** 依赖的子任务 ID 列表（可选，缺省按无依赖并行执行） */
+  dependencies?: string[];
   /** 该子任务超时（毫秒），0 表示用默认 */
   timeoutMs?: number;
 }
@@ -206,7 +209,9 @@ export type FanOutEvent =
   | { kind: "subtask-completed"; fanOutId: string; subtaskId: string; agentId: string; finalText: string }
   | { kind: "subtask-failed"; fanOutId: string; subtaskId: string; agentId: string; error: string }
   | { kind: "subtask-timeout"; fanOutId: string; subtaskId: string; agentId: string }
-  | { kind: "fanout-completed"; fanOutId: string; results: Array<{ subtaskId: string; agentId: string; finalText: string | null; error?: string }> };
+  | { kind: "fanout-completed"; fanOutId: string; results: Array<{ subtaskId: string; agentId: string; finalText: string | null; error?: string }> }
+  | { kind: "synthesis-completed"; fanOutId: string; report: string; providerID: string; modelID: string }
+  | { kind: "synthesis-failed"; fanOutId: string; error: string };
 
 /** Relay 阶段事件 */
 export type RelayStageEvent =

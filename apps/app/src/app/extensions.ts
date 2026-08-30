@@ -312,29 +312,33 @@ export const BUILT_IN_OPENWORK_EXTENSION_MANIFESTS: OpenWorkExtensionManifest[] 
   //   package, we use a TINY local mirror here — the single source of truth
   //   lives in ee/packages/team-autonomy/src/ui/manifest.ts and MUST be kept
   //   in sync via review.
+  //   Deliberate drift as of this change: this build serves teams from the
+  //   bundled openwork-server (/teams routes), so the mirror is enabled by
+  //   default and dropped the TEAM_AUTONOMY_ENABLED license/env gate. The EE
+  //   package keeps that gate for the hosted build. Syncing must reconcile
+  //   the two on purposes, not overwrite this entry.
   {
     schemaVersion: 1,
     id: "openwork-team-autonomy",
     name: "Team Autonomy",
     description:
-      "Multi-agent team governance: decompose tasks into boards, auto-create personal team per user, gate permissions with standing rules, and validate skills before agents run them.",
+      "Multi-agent teams: decompose a task into subtasks, run them in parallel with the CLI agents installed on this machine, and follow each subtask's status and output.",
     preview: true,
     source: { format: "openwork-builtin", origin: "builtin", trusted: true },
     composer: {
       prompt:
-        "Use Team Autonomy to delegate to a team, break a plan into tasks, or check team inbox for approvals. ",
+        "Use Team Mode to split this task across agents and run the parts in parallel: ",
     },
     setup: {
       instructions:
-        "Team Autonomy is part of the Enterprise server build. Set TEAM_AUTONOMY_ENABLED=1 on the Den host, then open Team → Board from the sidebar to see tasks and agents.",
-      requiredEnv: ["TEAM_AUTONOMY_ENABLED"],
+        "Team Mode talks to the /teams routes on the local openwork-server — no Enterprise build or environment variable needed. Running a task spawns the CLI agents installed on this machine (opencode, kimi, claude-code, codex, …), so install at least one before hitting Run.",
     },
     resources: [
       {
         type: "local-service",
         id: "team-autonomy-api",
-        label: "Team Autonomy HTTP routes",
-        description: "Hosted on Den under /api/teams/:teamId/*",
+        label: "Team HTTP routes",
+        description: "Served by the local openwork-server under /teams/*",
         required: true,
       },
     ],
@@ -362,17 +366,16 @@ export const BUILT_IN_OPENWORK_EXTENSION_MANIFESTS: OpenWorkExtensionManifest[] 
       {
         type: "composer-prompt",
         prompt:
-          "Use Team Autonomy to delegate to a team, break a plan into tasks, or check team inbox for approvals. ",
+          "Use Team Mode to split this task across agents and run the parts in parallel: ",
         location: "composer",
       },
       { type: "control-actions", ref: "openwork.teamAutonomy.controlActions" },
     ],
     enablement: [
       { type: "toggle-enabled", ref: "openwork-team-autonomy", label: "Enabled" },
-      { type: "env-set", ref: "TEAM_AUTONOMY_ENABLED", label: "Server license flag" },
     ],
-    lifecycle: { reload: ["config", "agents"], detection: ["env:TEAM_AUTONOMY_ENABLED"] },
-    defaultEnabled: false,
+    lifecycle: { reload: ["config", "agents"] },
+    defaultEnabled: true,
     defaultHidden: false,
     platform: ["darwin", "linux", "windows", "web"],
   },

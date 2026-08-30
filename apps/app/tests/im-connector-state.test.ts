@@ -1,14 +1,19 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   INITIAL_STATES,
   applyTransition,
   completeConnect,
+  completeConnectFromConfig,
   connectedCount,
   formatStatusLabel,
   formatStatusTone,
+  platformWorkspaceLabel,
   requestConnect,
   requestDisconnect,
+  statesFromServerConfigs,
+  type ImConnectorState,
 } from "../src/react-app/domains/settings/im-connector-state";
+import { setLocale } from "../src/i18n";
 
 type Platform = (typeof INITIAL_STATES)[number]["id"];
 
@@ -166,6 +171,15 @@ describe("connectedCount", () => {
 });
 
 describe("formatStatusLabel", () => {
+  beforeAll(() => {
+    // 状态文案跟随当前 locale；该面板按中文环境断言。
+    setLocale("zh");
+  });
+  afterAll(() => {
+    // 复位全局 locale，避免污染同进程内其他测试（默认应为 en）。
+    setLocale("en");
+  });
+
   test.each([
     ["connected", "已连接"],
     ["connecting", "连接中"],
@@ -238,5 +252,78 @@ describe("edge cases", () => {
   test("empty state list", () => {
     expect(applyTransition([], "feishu", "connect")).toEqual([]);
     expect(connectedCount([])).toBe(0);
+  });
+});
+
+describe("statesFromServerConfigs (后端配置 → UI 状态)", () => {
+  test("enabled server configs map to connected states, preserving 5-platform order", () => {
+    const states = statesFromServerConfigs([
+      { channelId: "slack", webhookUrl: "https://hooks.slack.com/T123", enabled: true, updatedAt: 1_700_000_000_000 },
+      { channelId: "feishu", webhookUrl: "https://open.feishu.cn/hook", enabled: true, updatedAt: 1_700_000_000_000 },
+    ]);
+    expect(states.length).toBe(5);
+    expect(states.map((s) => s.id)).toEqual(["feishu", "wecom", "dingtalk", "slack", "discord"]);
+    expect(states.find((s) => s.id === "feishu")!.status).toBe("connected");
+    expect(states.find((s) => s.id === "feishu")!.workspace).toBe("OpenWork 工作区");
+    expect(states.find((s) => s.id === "slack")!.status).toBe("connected");
+    expect(states.find((s) => s.id === "slack")!.workspace).toBe("Demo Team");
+    expect(states.find((s) => s.id === "wecom")!.status).toBe("disconnected");
+    expect(connectedCount(states)).toBe(2);
+  });
+
+  test("disabled or missing configs stay disconnected", () => {
+    const states = statesFromServerConfigs([
+      { channelId: "wecom", webhookUrl: "https://qyapi.weixin.qq.com/hook", enabled: false, updatedAt: 0 },
+    ]);
+    expect(states.every((s) => s.status === "disconnected")).toBe(true);
+    expect(statesFromServerConfigs([]).every((s) => s.status === "disconnected")).toBe(true);
+  });
+
+  test("empty configs produce fully disconnected initial state", () => {
+    expect(statesFromServerConfigs([])).toEqual(INITIAL_STATES);
+  });
+});
+
+describe("completeConnectFromConfig (连接成功后更新)", () => {
+  test("connecting → connected with server-provided metadata", () => {
+    const states = [{ id: "slack", status: "connecting" }] as ImConnectorState[];
+    const result = completeConnectFromConfig(states, "slack", {
+      channelId: "slack",
+      webhookUrl: "https://hooks.slack.com/T123",
+      token: "tok",
+      enabled: true,
+      updatedAt: 1_700_000_000_000,
+    });
+    expect(result[0]!.status).toBe("connected");
+    expect(result[0]!.workspace).toBe("Demo Team");
+    expect(result[0]!.botName).toBe("OpenWork Bot");
+    expect(typeof result[0]!.lastSyncAt).toBe("string");
+    expect(result[0]!.lastSyncAt!.length).toBeGreaterThan(0);
+  });
+
+  test("does not change non-connecting or other platforms", () => {
+    const states = [
+      { id: "feishu", status: "disconnected" },
+      { id: "wecom", status: "connected", workspace: "WS" },
+    ] as ImConnectorState[];
+    const result = completeConnectFromConfig(states, "feishu", {
+      channelId: "feishu",
+      webhookUrl: "https://open.feishu.cn/hook",
+      enabled: true,
+      updatedAt: 0,
+    });
+    expect(result[0]!.status).toBe("disconnected");
+    expect(result[1]!.status).toBe("connected");
+    expect(result[1]!.workspace).toBe("WS");
+  });
+});
+
+describe("platformWorkspaceLabel", () => {
+  test("feishu gets the workspace label, others get Demo Team", () => {
+    expect(platformWorkspaceLabel("feishu")).toBe("OpenWork 工作区");
+    expect(platformWorkspaceLabel("wecom")).toBe("Demo Team");
+    expect(platformWorkspaceLabel("dingtalk")).toBe("Demo Team");
+    expect(platformWorkspaceLabel("slack")).toBe("Demo Team");
+    expect(platformWorkspaceLabel("discord")).toBe("Demo Team");
   });
 });

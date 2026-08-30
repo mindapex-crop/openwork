@@ -16,6 +16,8 @@
  * - 健康检查
  */
 
+import { externalFetch } from "../server-fetch.js";
+
 export type HarnessKind = "local" | "ssh" | "cloud" | "container";
 
 export interface HarnessCapabilities {
@@ -371,7 +373,7 @@ export class HarnessManager {
     }
 
     try {
-      const response = await fetch(`${harness.cloudConfig.endpoint}/health`, {
+      const response = await externalFetch(`${harness.cloudConfig.endpoint}/health`, {
         method: "GET",
         headers: harness.cloudConfig.authToken
           ? { Authorization: `Bearer ${harness.cloudConfig.authToken}` }

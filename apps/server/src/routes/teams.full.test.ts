@@ -1,7 +1,10 @@
 /**
  * teams 路由完整测试 - 覆盖所有端点（happy path + 异常流程 + 边界条件）
  */
-import { describe, expect, test, beforeEach } from "bun:test";
+import { describe, expect, test, beforeEach, beforeAll } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ApprovalService } from "../approvals.js";
 import type { ReloadEventStore } from "../events.js";
 import type { TokenService } from "../tokens.js";
@@ -12,6 +15,13 @@ import {
   registerTeamRoutes,
   type RunSimpleExecutor,
 } from "./teams.js";
+
+let teamStorePath: string;
+
+beforeAll(async () => {
+  // 团队持久化 sqlite 路径（隔离测试数据，避免写入真实配置目录）
+  teamStorePath = join(await mkdtemp(join(tmpdir(), "teams-full-test-")), "teams.sqlite");
+});
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -35,6 +45,7 @@ function buildRoutes(opts?: {
     routes,
     jsonResponse,
     readJsonBody,
+    teamStorePath,
     detectAgents: opts?.detectAgents,
     executePlan: opts?.executePlan,
   });
@@ -500,7 +511,8 @@ describe("POST /teams/:id/decompose — 任务分解", () => {
     expect(result.decomposition.taskId).toMatch(/^task_/);
     expect(result.decomposition.strategy).toBe("balanced");
     expect((result.decomposition.subtasks as unknown[]).length).toBeGreaterThan(0);
-    expect(typeof result.decomposition.estimatedCost).toBe("object");
+    expect(typeof result.decomposition.strategyMeta).toBe("object");
+    expect(result.decomposition.estimatedCost).toBeUndefined();
   });
 
   test("forceStrategy 覆盖团队默认策略", async () => {
@@ -559,14 +571,38 @@ describe("POST /teams/:id/decompose — 任务分解", () => {
 
 // ─── Run ────────────────────────────────────────────────────────────
 
+/** 三个互不重复的可用 agent：让 balanced 分解出 implement + review 两只子任务 */
+const threeAvailableAgents = async (): Promise<AgentDetectResult[]> => [
+  { agentId: "opencode", available: true, binaryPath: "/usr/bin/opencode", version: "1.0", confidence: 0.95 },
+  { agentId: "kimi", available: true, binaryPath: "/usr/bin/kimi", version: "2.0", confidence: 0.9 },
+  { agentId: "claude-code", available: true, binaryPath: "/usr/bin/claude", version: "3.0", confidence: 0.9 },
+];
+
 describe("POST /teams/:id/run — 运行任务", () => {
-  let routes: Route[];
+  /** 只用于读回持久化状态；与 run 路由共用 teamStorePath（TeamStore 按路径复用连接） */
+  let readerRoutes: Route[];
   beforeEach(() => {
-    routes = buildRoutes();
+    readerRoutes = buildRoutes();
   });
 
-  test("dryRun=true 返回计划而不执行", async () => {
-    const team = await createTeam(routes);
+  async function createRunnableTeam(): Promise<{ id: string; [k: string]: unknown }> {
+    const { body } = await callRoute(readerRoutes, "POST", "/teams", {
+      name: "Runnable Team",
+      members: [
+        { agentId: "opencode", role: "primary" },
+        { agentId: "kimi", role: "specialist" },
+        { agentId: "claude-code", role: "reviewer" },
+      ],
+    });
+    return (body as { team: { id: string; [k: string]: unknown } }).team;
+  }
+
+  test("dryRun=true 返回计划且不落盘执行结果", async () => {
+    const routes = buildRoutes({
+      detectAgents: threeAvailableAgents,
+      executePlan: fakeAllCompleted,
+    });
+    const team = await createRunnableTeam();
     const { status, body } = await callRoute(routes, "POST", `/teams/${team.id}/run`, {
       taskPrompt: "实现功能",
       dryRun: true,
@@ -577,21 +613,97 @@ describe("POST /teams/:id/run — 运行任务", () => {
     expect(result.dryRun).toBe(true);
     expect(result.strategy).toBe("balanced");
     expect(result.taskId).toMatch(/^task_/);
-    expect((result.subtasks as unknown[]).length).toBeGreaterThan(0);
+    expect((result.subtasks as unknown[]).length).toBe(2);
+    const tasks = await callRoute(readerRoutes, "GET", `/teams/${team.id}/tasks`);
+    expect((tasks.body as { tasks: unknown[] }).tasks).toEqual([]);
   });
 
-  test("非 dryRun 返回 202 accepted", async () => {
-    const team = await createTeam(routes);
+  test("真实执行返回与 run-simple 同 shape，子任务落到终态", async () => {
+    const routes = buildRoutes({
+      detectAgents: threeAvailableAgents,
+      executePlan: fakeAllCompleted,
+    });
+    const team = await createRunnableTeam();
     const { status, body } = await callRoute(routes, "POST", `/teams/${team.id}/run`, {
       taskPrompt: "实现功能",
     });
-    expect(status).toBe(202);
-    const result = body as { task: { status: string; message: string } };
-    expect(result.task.status).toBe("planned");
-    expect(result.task.message).toContain("subtasks");
+    expect(status).toBe(200);
+    const result = body as {
+      teamId: string;
+      taskId: string;
+      strategy: string;
+      status: string;
+      subtaskResults: Array<{ subtaskId: string; agentId: string; status: string; outputTail?: string }>;
+      message: string;
+    };
+    expect(result.teamId).toBe(team.id);
+    expect(result.taskId).toMatch(/^task_/);
+    expect(result.status).toBe("completed");
+    expect(result.subtaskResults.length).toBe(2);
+    expect(result.message).toContain("completed");
+
+    const tasks = (await callRoute(readerRoutes, "GET", `/teams/${team.id}/tasks`))
+      .body as {
+        tasks: Array<{ taskId: string; subtasks: Array<{ status: string }> }>;
+      };
+    expect(tasks.tasks.length).toBe(1);
+    expect(tasks.tasks[0].taskId).toBe(result.taskId);
+    for (const subtask of tasks.tasks[0].subtasks) {
+      expect(subtask.status).toBe("completed");
+    }
+  });
+
+  test("执行期间子任务状态实时落盘（running 与 pending 同时可见）", async () => {
+    const team = await createRunnableTeam();
+    let midRun: Array<{ subtaskId: string; status: string }> = [];
+
+    const progressExecutor: RunSimpleExecutor = async (plan) => {
+      plan.onProgress?.({ subtaskId: plan.subtasks[0].subtaskId, status: "running" });
+      const snapshot = (await callRoute(readerRoutes, "GET", `/teams/${plan.teamId}/tasks`))
+        .body as { tasks: Array<{ subtasks: Array<{ subtaskId: string; status: string }> }> };
+      midRun = snapshot.tasks[0].subtasks;
+      return fakeAllCompleted(plan);
+    };
+
+    const routes = buildRoutes({
+      detectAgents: threeAvailableAgents,
+      executePlan: progressExecutor,
+    });
+    const { status } = await callRoute(routes, "POST", `/teams/${team.id}/run`, {
+      taskPrompt: "实现功能",
+    });
+    expect(status).toBe(200);
+    expect(midRun.length).toBe(2);
+    expect(midRun.filter((s) => s.status === "running").length).toBe(1);
+    expect(midRun.filter((s) => s.status === "pending").length).toBe(1);
+  });
+
+  test("团队成员在本机均不可用时返回 400 且不留下 running 状态", async () => {
+    const routes = buildRoutes({
+      detectAgents: async () => [
+        { agentId: "unrelated", available: true, binaryPath: "/usr/bin/unrelated", version: "1.0", confidence: 0.9 },
+      ],
+      executePlan: fakeAllCompleted,
+    });
+    const team = await createRunnableTeam();
+    const { status, body } = await callRoute(routes, "POST", `/teams/${team.id}/run`, {
+      taskPrompt: "实现功能",
+    });
+    expect(status).toBe(400);
+    expect((body as { error: string }).error).toBe("no_agent_available");
+    expect((body as { hint?: string }).hint).toContain("未检测到可用的 agent");
+
+    const detail = (await callRoute(readerRoutes, "GET", `/teams/${team.id}`))
+      .body as { team: { status: string; lastTaskResult?: unknown } };
+    expect(detail.team.status).toBe("idle");
+    expect(detail.team.lastTaskResult).toBeNull();
   });
 
   test("不存在的 team 返回 404", async () => {
+    const routes = buildRoutes({
+      detectAgents: threeAvailableAgents,
+      executePlan: fakeAllCompleted,
+    });
     const { status } = await callRoute(routes, "POST", "/teams/fake_id/run", {
       taskPrompt: "x",
     });
@@ -599,14 +711,22 @@ describe("POST /teams/:id/run — 运行任务", () => {
   });
 
   test("缺少 taskPrompt 返回 400", async () => {
-    const team = await createTeam(routes);
+    const routes = buildRoutes({
+      detectAgents: threeAvailableAgents,
+      executePlan: fakeAllCompleted,
+    });
+    const team = await createRunnableTeam();
     const { status, body } = await callRoute(routes, "POST", `/teams/${team.id}/run`, {});
     expect(status).toBe(400);
     expect((body as { error: string }).error).toBe("taskPrompt is required");
   });
 
   test("taskPrompt 为空格返回 400", async () => {
-    const team = await createTeam(routes);
+    const routes = buildRoutes({
+      detectAgents: threeAvailableAgents,
+      executePlan: fakeAllCompleted,
+    });
+    const team = await createRunnableTeam();
     const { status } = await callRoute(routes, "POST", `/teams/${team.id}/run`, {
       taskPrompt: "  \t\n  ",
     });
@@ -614,7 +734,11 @@ describe("POST /teams/:id/run — 运行任务", () => {
   });
 
   test("body 无效返回 400", async () => {
-    const team = await createTeam(routes);
+    const routes = buildRoutes({
+      detectAgents: threeAvailableAgents,
+      executePlan: fakeAllCompleted,
+    });
+    const team = await createRunnableTeam();
     const { status } = await callRoute(routes, "POST", `/teams/${team.id}/run`, null);
     expect(status).toBe(400);
   });

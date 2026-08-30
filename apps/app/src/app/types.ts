@@ -101,6 +101,16 @@ export type ComposerPart =
   | { type: "file"; path: string; label?: string }
   /** A macOS app targeted via Computer Use (composer "@App" mention). */
   | { type: "app"; name: string }
+  /** A code snippet reference (composer "@Code" mention). */
+  | { type: "code"; value: string; filePath: string; snippetKind: string; anchor: string }
+  /** A knowledge base reference (composer "@Docs" mention). */
+  | { type: "docs"; value: string; title: string }
+  /** A git changes/commit reference (composer "@Git" mention). */
+  | { type: "git"; value: string }
+  /** A terminal command reference (composer "@Terminal" mention). */
+  | { type: "terminal"; value: string; command: string }
+  /** A coding-standard rule reference (composer "@Rules" mention). */
+  | { type: "rules"; value: string; name: string }
   | { type: "paste"; id: string; label: string; text: string; lines: number };
 
 export type ComposerAttachment = {
@@ -198,6 +208,10 @@ export const SETTINGS_TAB_VALUES = [
   "recovery",
   "debug",
   "im-connectors",
+  "connectors",
+  "usage",
+  "notifications",
+  "about",
 ] as const;
 
 export type SettingsTab = (typeof SETTINGS_TAB_VALUES)[number];

@@ -53,6 +53,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea, ScrollAreaViewport } from "@/components/ui/scroll-area";
 import { SettingsGroupHeader } from "../settings-section";
 import { cn } from "@/lib/utils";
+import { resolveServerApiBaseUrl } from "@/react-app/shell/openwork-connection";
 
 interface AgentDefinition {
   id: string;
@@ -107,7 +108,8 @@ export function AgentManagementView() {
     setLoading(true);
     setError(null);
     try {
-      const resp = await fetch("/api/agents");
+      const baseUrl = await resolveServerApiBaseUrl();
+      const resp = await fetch(baseUrl ? `${baseUrl}/agents` : "/agents");
       if (!resp.ok) throw new Error("Failed to fetch agents");
       const data = await resp.json();
       setAgents(data.items || []);
@@ -200,7 +202,8 @@ export function AgentManagementView() {
 
     setLoading(true);
     try {
-      const resp = await fetch(`/api/agents/${id}`, { method: "DELETE" });
+      const baseUrl = await resolveServerApiBaseUrl();
+      const resp = await fetch(baseUrl ? `${baseUrl}/agents/${id}` : `/agents/${id}`, { method: "DELETE" });
       if (!resp.ok) throw new Error("Failed to delete agent");
       await fetchAgents();
     } catch (err) {

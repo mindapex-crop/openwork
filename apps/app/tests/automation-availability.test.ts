@@ -8,9 +8,11 @@ const read = (relative: string) =>
 /**
  * Automations shipped out of preview: there is no per-device feature flag any
  * more. The surface is available on every desktop, gated only by the runtime
- * (desktop-only) and the live Den availability probe. These checks pin that
- * contract so a refactor cannot silently reintroduce an opt-in gate or expose
- * the surface on web.
+ * (desktop-only). The live Den availability probe only drives the "needs
+ * attention" indicator, not the sidebar entry — so the entry stays visible
+ * even before sign-in (WorkBuddy 自动化入口常驻对标). These checks pin that
+ * contract so a refactor cannot silently reintroduce an opt-in gate, an entry
+ * that disappears before sign-in, or expose the surface on web.
  */
 describe("Automations availability", () => {
   test("no preview feature flag remains in the local preferences", () => {
@@ -21,13 +23,15 @@ describe("Automations availability", () => {
     expect(flags).not.toContain("automations")
   })
 
-  test("the shell gates route, Den probe, and navigation on desktop runtime only", () => {
+  test("the shell gates the route on desktop runtime only and keeps the entry always available", () => {
     const source = read("src/react-app/shell/session-route.tsx")
     expect(source).toContain("const automationsEnabled = isDesktopRuntime()")
     expect(source).not.toContain("featureFlags?.automations")
     expect(source).toContain("automationsEnabled && automationsRouteRequested")
     expect(source).toContain("!automationsEnabled || !denAuth.isSignedIn")
-    expect(source).toContain("automationsEnabled && automationsSupported")
+    // Entry 常驻：导航仅由桌面运行时门控，不依赖 Den 登录/可用性探测。
+    expect(source).toContain("const automationsNavigationAvailable = automationsEnabled")
+    expect(source).not.toContain("automationsSupported")
   })
 
   test("the runner bridge registers on desktop without an opt-in", () => {

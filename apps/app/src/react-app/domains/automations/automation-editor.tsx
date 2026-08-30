@@ -6,11 +6,14 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { ChevronDown } from "lucide-react"
+import { ChevronDown, Sparkles } from "lucide-react"
 
 import { ModelPickerModal } from "@/react-app/domains/session/modals/model-picker-modal"
 import type { AutomationModelOption, AutomationProviderCatalog } from "./automation-model-options"
 import { automationPickerOptions, describeAutomationModel } from "./automation-model-options"
+import { parseNaturalLanguage } from "./automation-store"
+import { t } from "@/i18n"
+import { formatNextRuns } from "./automation-schedule-preview"
 
 const WEEKDAYS = [
   { value: 1, label: "Mon" },
@@ -106,6 +109,23 @@ export function AutomationEditor(props: AutomationEditorProps) {
     [currentModelAvailable, input.instructions, input.name],
   )
   const time = timeForSchedule(input.schedule)
+  const [quickCreateInput, setQuickCreateInput] = useState("")
+  const schedulePreview = useMemo(
+    () => (input.schedule.kind === "once" ? [] : formatNextRuns(input.schedule, 3)),
+    [input.schedule],
+  )
+
+  const applyQuickCreate = () => {
+    const parsed = parseNaturalLanguage(quickCreateInput)
+    if (!parsed.name && !parsed.instructions) return
+    setInput((current) => ({
+      ...current,
+      name: parsed.name ?? current.name,
+      instructions: parsed.instructions ?? current.instructions,
+      schedule: parsed.schedule ?? current.schedule,
+    }))
+    setQuickCreateInput("")
+  }
 
   const changeScheduleKind = (kind: AutomationSchedule["kind"]) => {
     const timezone = input.schedule.timezone
@@ -153,6 +173,34 @@ export function AutomationEditor(props: AutomationEditorProps) {
         if (canSave && !props.busy) void props.onSave(input)
       }}
     >
+      <div className="space-y-2">
+        <Label htmlFor="automation-quick-create">{t("automations.quick_create")}</Label>
+        <div className="flex gap-2">
+          <Input
+            id="automation-quick-create"
+            value={quickCreateInput}
+            placeholder={t("automations.quick_create_placeholder")}
+            onChange={(event) => setQuickCreateInput(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                applyQuickCreate()
+              }
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!quickCreateInput.trim()}
+            onClick={applyQuickCreate}
+            aria-label={t("automations.apply_quick_create")}
+          >
+            <Sparkles className="size-4" />
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">{t("automations.quick_create_hint")}</p>
+      </div>
+
       <div className="space-y-2">
         <Label htmlFor="automation-name">Name</Label>
         <Input
@@ -226,6 +274,11 @@ export function AutomationEditor(props: AutomationEditorProps) {
               value={`${String(time.hour).padStart(2, "0")}:${String(time.minute).padStart(2, "0")}`}
               onChange={(event) => changeTime(event.currentTarget.value)}
             />
+            {schedulePreview.length > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Next runs: {schedulePreview.join(" · ")}
+              </p>
+            ) : null}
           </div>
         )}
       </div>

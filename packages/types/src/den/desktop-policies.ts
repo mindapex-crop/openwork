@@ -435,7 +435,7 @@ export function calculateEffectiveDesktopPolicy(input: {
     return allDesktopPolicies(true);
   }
 
-  const calculated = allDesktopPolicies(false);
+  const calculated = { ...desktopPolicyDefaults };
   const policies = [
     normalizeDefaultDesktopPolicyValue(input.defaultPolicy ?? {}),
     ...input.assignedPolicies.map((policy) =>
@@ -445,8 +445,8 @@ export function calculateEffectiveDesktopPolicy(input: {
 
   for (const policy of policies) {
     for (const key of desktopPolicyKeys) {
-      if (policy[key] === true) {
-        calculated[key] = true;
+      if (typeof policy[key] === "boolean") {
+        calculated[key] = policy[key];
       }
     }
   }

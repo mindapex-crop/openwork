@@ -1,19 +1,18 @@
 /** @jsxImportSource react */
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Cloud,
   ExternalLink,
-  MessageSquare,
   MessagesSquare,
   Plus,
   Power,
   RefreshCcw,
-  Send,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   LayoutSection,
   LayoutSectionContent,
@@ -29,84 +28,44 @@ import {
 import {
   formatStatusLabel,
   formatStatusTone,
+  type ImConnectorPlatform,
 } from "./im-connector-state";
-import { t } from "@/i18n";
+import { IM_CONNECTOR_DEFINITIONS, type ImConnectorDefinition, useImConnectorStore } from "./im-connector-store";
+import { currentLocale, t } from "@/i18n";
 
-type ImConnectorPlatform = "feishu" | "wecom" | "dingtalk" | "slack" | "discord";
+// 页面级文案字典（新增文案不触碰全局 locales；跟随当前语言，缺省回退英文）
+const PAGE_COPY: Record<string, { en: string; zh: string }> = {
+  connect_title: { en: "Connect {name}", zh: "连接 {name}" },
+  connect_desc: {
+    en: "Fill in the platform webhook URL. Messages sent to this webhook will be relayed to OpenWork Agents.",
+    zh: "填写平台的 Webhook URL。发送到该 Webhook 的消息会转交给 OpenWork Agent。",
+  },
+  webhook_label: { en: "Webhook URL", zh: "Webhook URL" },
+  webhook_placeholder: { en: "https://...", zh: "https://..." },
+  token_label: { en: "Token (optional)", zh: "Token（可选）" },
+  token_placeholder: { en: "Verification token / secret", zh: "校验 Token / 密钥" },
+  save: { en: "Save & Connect", zh: "保存并连接" },
+  cancel: { en: "Cancel", zh: "取消" },
+  webhook_required: { en: "Webhook URL is required.", zh: "请填写 Webhook URL。" },
+  connect_failed: { en: "Connection failed. Check the Webhook URL and try again.", zh: "连接失败，请检查 Webhook URL 后重试。" },
+};
 
-type ImConnectorStatus = "disconnected" | "connecting" | "connected";
-
-interface ImConnectorDefinition {
-  id: ImConnectorPlatform;
-  name: string;
-  description: string;
-  icon: React.ComponentType<{ className?: string }>;
-  documentationUrl?: string;
-  accent: string;
+function pageText(key: string, params?: Record<string, string>): string {
+  const locale = currentLocale();
+  const entry = PAGE_COPY[key];
+  const template = entry ? entry[locale === "zh" ? "zh" : "en"] : key;
+  if (!params) return template;
+  let out = template;
+  for (const [k, v] of Object.entries(params)) out = out.replace(`{${k}}`, v);
+  return out;
 }
-
-interface ImConnectorState {
-  id: ImConnectorPlatform;
-  status: ImConnectorStatus;
-  workspace?: string;
-  botName?: string;
-  lastSyncAt?: string;
-}
-
-const DEFINITIONS: ImConnectorDefinition[] = [
-  {
-    id: "feishu",
-    name: "飞书",
-    description: "通过飞书机器人接收消息、创建任务与回复通知。",
-    icon: MessagesSquare,
-    documentationUrl: "https://open.feishu.cn/",
-    accent: "bg-indigo-500",
-  },
-  {
-    id: "wecom",
-    name: "企业微信",
-    description: "接入企业微信应用，在内部群中启动 Agent 会话。",
-    icon: MessageSquare,
-    documentationUrl: "https://developer.work.weixin.qq.com/",
-    accent: "bg-sky-500",
-  },
-  {
-    id: "dingtalk",
-    name: "钉钉",
-    description: "通过钉钉连接器在群聊与工作通知中推送产物。",
-    icon: Send,
-    documentationUrl: "https://open.dingtalk.com/",
-    accent: "bg-violet-500",
-  },
-  {
-    id: "slack",
-    name: "Slack",
-    description: "在 Slack 频道中与 OpenWork Agent 对话。",
-    icon: Cloud,
-    documentationUrl: "https://api.slack.com/",
-    accent: "bg-rose-500",
-  },
-  {
-    id: "discord",
-    name: "Discord",
-    description: "Discord Bot 集成：创建专属技能频道。",
-    icon: MessageSquare,
-    documentationUrl: "https://discord.com/developers",
-    accent: "bg-indigo-600",
-  },
-];
-
-const LOCAL_INITIAL_STATES: ImConnectorState[] = [
-  { id: "feishu", status: "disconnected" },
-  { id: "wecom", status: "disconnected" },
-  { id: "dingtalk", status: "disconnected" },
-  { id: "slack", status: "disconnected" },
-  { id: "discord", status: "disconnected" },
-];
 
 interface ImConnectorCardProps {
   definition: ImConnectorDefinition;
-  state: ImConnectorState;
+  status: "disconnected" | "connecting" | "connected";
+  workspace?: string;
+  lastSyncAt?: string;
+  botName?: string;
   onConnect: (id: ImConnectorPlatform) => void;
   onDisconnect: (id: ImConnectorPlatform) => void;
 }
@@ -124,38 +83,38 @@ function ImConnectorCard(props: ImConnectorCardProps) {
             <div>
               <div className="flex items-center gap-2">
                 <CardTitle className="text-sm font-medium">{props.definition.name}</CardTitle>
-                {props.state.workspace ? (
+                {props.workspace ? (
                   <Badge variant="secondary" className="text-[10px]">
-                    {props.state.workspace}
+                    {props.workspace}
                   </Badge>
                 ) : null}
               </div>
               <CardDescription className="mt-0.5 text-xs">{props.definition.description}</CardDescription>
             </div>
           </div>
-          <Badge variant={formatStatusTone(props.state.status) as any} className="text-[11px] shrink-0">
-            {formatStatusLabel(props.state.status)}
+          <Badge variant={formatStatusTone(props.status) as any} className="text-[11px] shrink-0">
+            {formatStatusLabel(props.status)}
           </Badge>
         </div>
       </CardHeader>
       <CardContent>
         <div className="flex items-center justify-between">
           <div className="text-[11px] text-muted-foreground">
-            {props.state.lastSyncAt ? (
+            {props.lastSyncAt ? (
               <>
-                {t("im_connectors.last_sync")}{props.state.lastSyncAt}
-                {props.state.botName ? <> · {t("im_connectors.bot")}{props.state.botName}</> : null}
+                {t("im_connectors.last_sync")}{props.lastSyncAt}
+                {props.botName ? <> · {t("im_connectors.bot")}{props.botName}</> : null}
               </>
-            ) : props.state.status === "connected" ? (
+            ) : props.status === "connected" ? (
               t("im_connectors.connected_ready")
             ) : (
               t("im_connectors.configure_hint")
             )}
           </div>
           <div className="flex items-center gap-1.5">
-            {props.state.status === "connected" ? (
+            {props.status === "connected" ? (
               <>
-                <Button variant="ghost" size="icon-sm"                  title={t("im_connectors.resync")} disabled={props.state.status !== "connected"}>
+                <Button variant="ghost" size="icon-sm"                  title={t("im_connectors.resync")} disabled={props.status !== "connected"}>
                   <RefreshCcw className="size-3.5" />
                 </Button>
                 <Button variant="ghost" size="sm" onClick={() => props.onDisconnect(props.definition.id)}>
@@ -163,7 +122,7 @@ function ImConnectorCard(props: ImConnectorCardProps) {
                   {t("im_connectors.disconnect")}
                 </Button>
               </>
-            ) : props.state.status === "connecting" ? (
+            ) : props.status === "connecting" ? (
               <Button size="sm" disabled>
                 <RefreshCcw className="mr-1.5 size-3.5 animate-spin" />
                 {t("im_connectors.authorizing")}
@@ -193,55 +152,65 @@ function ImConnectorCard(props: ImConnectorCardProps) {
 }
 
 export function ImConnectorsSection() {
-  const [states, setStates] = useState<ImConnectorState[]>(LOCAL_INITIAL_STATES);
+  const store = useImConnectorStore();
+  const [connectTarget, setConnectTarget] = useState<ImConnectorPlatform | null>(null);
+  const [formWebhook, setFormWebhook] = useState("");
+  const [formToken, setFormToken] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    store.refresh();
+  }, []);
 
   const definitionById = useMemo(() => {
     const map = new Map<ImConnectorPlatform, ImConnectorDefinition>();
-    DEFINITIONS.forEach((d) => map.set(d.id, d));
+    IM_CONNECTOR_DEFINITIONS.forEach((d) => map.set(d.id, d));
     return map;
   }, []);
 
   const summary = useMemo(() => {
-    const connected = states.filter((s) => s.status === "connected").length;
+    const connected = store.states.filter((s) => s.status === "connected").length;
     return {
       connected,
-      total: states.length,
+      total: store.states.length,
     };
-  }, [states]);
+  }, [store.states]);
 
-  const handleConnect = (id: ImConnectorPlatform) => {
-    setStates((prev) => prev.map((s) => (s.id === id ? { ...s, status: "connecting" } : s)));
-    window.setTimeout(() => {
-      setStates((prev) =>
-        prev.map((s) => {
-          if (s.id !== id) return s;
-          const now = new Date();
-          const iso = now.toLocaleString(undefined, {
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          });
-          return {
-            ...s,
-            status: "connected",
-            workspace: id === "feishu" ? "OpenWork 工作区" : "Demo Team",
-            botName: "OpenWork Bot",
-            lastSyncAt: iso,
-          };
-        }),
-      );
-    }, 900);
-  };
+  const handleConnect = useCallback((id: ImConnectorPlatform) => {
+    setConnectTarget(id);
+    setFormWebhook("");
+    setFormToken("");
+    setFormError(null);
+  }, []);
 
-  const handleDisconnect = (id: ImConnectorPlatform) => {
-    setStates((prev) =>
-      prev.map((s) => {
-        if (s.id !== id) return s;
-        return { id, status: "disconnected" };
-      }),
-    );
-  };
+  const handleDisconnect = useCallback(
+    (id: ImConnectorPlatform) => {
+      store.disconnect(id);
+    },
+    [store],
+  );
+
+  const submitConnect = useCallback(async () => {
+    if (!connectTarget) return;
+    const webhookUrl = formWebhook.trim();
+    if (!webhookUrl) {
+      setFormError(pageText("webhook_required"));
+      return;
+    }
+    setBusy(true);
+    setFormError(null);
+    try {
+      await store.connect(connectTarget, webhookUrl, formToken.trim() || undefined);
+      setConnectTarget(null);
+    } catch {
+      setFormError(pageText("connect_failed"));
+    } finally {
+      setBusy(false);
+    }
+  }, [connectTarget, formWebhook, formToken, store]);
+
+  const connectDefinition = connectTarget ? definitionById.get(connectTarget) : undefined;
 
   return (
     <LayoutStack>
@@ -271,14 +240,17 @@ export function ImConnectorsSection() {
               {t("im_connectors.connect_hint")}
             </LayoutSectionItemDescription>
             <div className="grid gap-3 md:grid-cols-1 xl:grid-cols-2">
-              {states.map((state) => {
+              {store.states.map((state) => {
                 const definition = definitionById.get(state.id);
                 if (!definition) return null;
                 return (
                   <ImConnectorCard
                     key={state.id}
                     definition={definition}
-                    state={state}
+                    status={state.status}
+                    workspace={state.workspace}
+                    lastSyncAt={state.lastSyncAt}
+                    botName={state.botName}
                     onConnect={handleConnect}
                     onDisconnect={handleDisconnect}
                   />
@@ -288,6 +260,51 @@ export function ImConnectorsSection() {
           </LayoutSectionItem>
         </LayoutSectionContent>
       </LayoutSection>
+
+      <Dialog
+        open={connectTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !busy) setConnectTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {pageText("connect_title", { name: connectDefinition?.name ?? connectTarget ?? "" })}
+            </DialogTitle>
+            <DialogDescription>{pageText("connect_desc")}</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <label className="grid gap-1.5 text-sm">
+              <span className="text-muted-foreground">{pageText("webhook_label")}</span>
+              <Input
+                value={formWebhook}
+                onChange={(event) => setFormWebhook(event.target.value)}
+                placeholder={pageText("webhook_placeholder")}
+                autoFocus
+              />
+            </label>
+            <label className="grid gap-1.5 text-sm">
+              <span className="text-muted-foreground">{pageText("token_label")}</span>
+              <Input
+                value={formToken}
+                onChange={(event) => setFormToken(event.target.value)}
+                placeholder={pageText("token_placeholder")}
+                type="password"
+              />
+            </label>
+            {formError ? <p className="text-xs text-destructive">{formError}</p> : null}
+          </div>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" disabled={busy} />}>
+              {pageText("cancel")}
+            </DialogClose>
+            <Button onClick={submitConnect} disabled={busy}>
+              {busy ? t("im_connectors.authorizing") : pageText("save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </LayoutStack>
   );
 }

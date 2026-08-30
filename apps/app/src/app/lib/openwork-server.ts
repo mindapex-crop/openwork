@@ -833,6 +833,15 @@ export type OpenworkWorkspaceFileStat = {
   updatedAt?: number;
 };
 
+/** 工作空间目录快照条目（server /files/sessions/:id/catalog/snapshot）。 */
+export type OpenworkWorkspaceCatalogEntry = {
+  path: string;
+  kind: "file" | "dir";
+  size: number;
+  mtimeMs: number;
+  revision: string;
+};
+
 export type OpenworkInboxItem = {
   id: string;
   name?: string;
@@ -2179,6 +2188,34 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
         token,
         hostToken,
       }),
+
+    /** 一次性读取工作空间目录树（含目录节点），供"工作空间文件"面板使用。 */
+    listWorkspaceCatalog: async (workspaceId: string) => {
+      const created = await requestJson<{ session: { id: string } }>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/files/sessions`,
+        { token, hostToken, method: "POST", body: { write: false } },
+      );
+      const sessionId = created.session.id;
+      try {
+        const result = await requestJson<{
+          items: OpenworkWorkspaceCatalogEntry[];
+          total: number;
+          truncated: boolean;
+        }>(
+          baseUrl,
+          `/files/sessions/${encodeURIComponent(sessionId)}/catalog/snapshot?includeDirs=true&limit=5000`,
+          { token, hostToken, timeoutMs: timeouts.binary },
+        );
+        return result.items;
+      } finally {
+        await requestJson<{ ok: boolean }>(baseUrl, `/files/sessions/${encodeURIComponent(sessionId)}`, {
+          token,
+          hostToken,
+          method: "DELETE",
+        }).catch(() => undefined);
+      }
+    },
 
     downloadInboxItem: (workspaceId: string, inboxId: string) =>
       requestBinary(

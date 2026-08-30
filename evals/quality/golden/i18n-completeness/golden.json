@@ -1,0 +1,25 @@
+{
+  "id": "i18n-completeness.ship-locale-keys-001",
+  "domain": "i18n-completeness",
+  "title": "Every shipped locale reconciles against the en baseline without structural drift",
+  "input": {
+    "localesDir": "apps/app/src/i18n/locales",
+    "baseline": "en"
+  },
+  "grading": {
+    "mode": "deterministic",
+    "expected": {
+      "type": "invariants",
+      "required": [
+        "baseline-is-source-of-truth",
+        "report-reconciles",
+        "diffs-sorted-and-disjoint",
+        "no-duplicate-keys"
+      ]
+    },
+    "driftPolicy": "report"
+  },
+  "metadata": {
+    "notes": "driftPolicy=report: key-count drift is measured and listed in the report as the i18n refactor worklist, but does not fail the case. Structural invariants (reconciliation, ordering, duplicates) fail loudly on regression."
+  }
+}

@@ -186,4 +186,105 @@ describe("project store — WorkBuddy Project → Plan → Task model", () => {
     expect(parsed.state.projects[0].id).toBe(id);
     expect(parsed.state.projects[0].plans).toHaveLength(1);
   });
+
+  test("migration: v2 project missing binding arrays is backfilled on rehydrate", async () => {
+    // A project persisted before the skills/experts/connectors fields existed
+    // (same key, version 2) lacks those arrays; consumers read .length directly.
+    window.localStorage.setItem(
+      PERSISTED_PROJECTS_KEY,
+      JSON.stringify({
+        state: {
+          projects: [
+            {
+              id: "p1",
+              name: "Legacy",
+              description: "",
+              status: "active",
+              plans: [],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+        },
+        version: 2,
+      }),
+    );
+    await useProjectStore.persist.rehydrate();
+    const project = useProjectStore.getState().projects.find((p) => p.id === "p1")!;
+    expect(project).toBeDefined();
+    expect(project.skills).toEqual([]);
+    expect(project.experts).toEqual([]);
+    expect(project.connectors).toEqual([]);
+    expect(project.activityEvents).toEqual([]);
+  });
+
+  test("migration: legacy v1 milestones/works content-sniff into the Plan model", async () => {
+    window.localStorage.setItem(
+      PERSISTED_PROJECTS_KEY,
+      JSON.stringify({
+        state: {
+          projects: [
+            {
+              id: "p1",
+              name: "V1",
+              milestones: [{ id: "m1", title: "Ship" }],
+              works: [{ id: "w1", title: "Draft docs" }],
+            },
+          ],
+        },
+        version: 1,
+      }),
+    );
+    await useProjectStore.persist.rehydrate();
+    const project = useProjectStore.getState().projects.find((p) => p.id === "p1")!;
+    expect(project.plans.length).toBeGreaterThanOrEqual(2);
+    expect(project.plans.some((plan) => plan.title === "Ship")).toBe(true);
+    const catchAll = project.plans.find((plan) => plan.title === "Tasks");
+    expect(catchAll?.tasks[0].title).toBe("Draft docs");
+    expect(project.skills).toEqual([]);
+  });
+
+  test("migration: nested plan/task fields (subtasks, evidence, status) backfilled on rehydrate", async () => {
+    // Tasks persisted before subtasks/evidence existed lack them; TaskCard reads
+    // task.subtasks.filter and task.evidence.status directly and crashed.
+    window.localStorage.setItem(
+      PERSISTED_PROJECTS_KEY,
+      JSON.stringify({
+        state: {
+          projects: [
+            {
+              id: "p1",
+              name: "Legacy",
+              description: "",
+              status: "active",
+              plans: [
+                {
+                  id: "plan-1",
+                  title: "Plan A",
+                  tasks: [{ id: "t1", title: "Old task" }],
+                },
+              ],
+              skills: [],
+              experts: [],
+              connectors: [],
+              activityEvents: [],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+        },
+        version: 3,
+      }),
+    );
+    await useProjectStore.persist.rehydrate();
+    const plan = useProjectStore.getState().projects[0].plans[0];
+    expect(plan.status).toBe("open");
+    const task = plan.tasks[0];
+    expect(task.subtasks).toEqual([]);
+    expect(task.evidence).toEqual({ status: "pending", notes: "" });
+    expect(task.status).toBe("todo");
+    expect(task.deliverables).toEqual([]);
+    // The exact crash path the detail panel took:
+    expect(() => task.subtasks.filter((s) => s.done)).not.toThrow();
+  });
 });

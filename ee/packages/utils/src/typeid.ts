@@ -122,6 +122,12 @@ export const idTypesMapNameToPrefix = {
   skillValidation: "skv",
   skillTestCase: "sktc",
   skillLink: "skl",
+  device: "dev",
+  devicePairingCode: "dpc",
+  relaySyncChange: "rsc",
+  sessionPresence: "sesp",
+  sandboxAllocation: "sal",
+  creditsTransaction: "ctx",
 } as const
 
 export const denTypeIdPrefixes = idTypesMapNameToPrefix

@@ -1,0 +1,73 @@
+# Daily E2E smoke journey (L4)
+
+Runs the L4 daily smoke journey (`evals/specs/daily-journey.slow.test.ts`):
+app boots → new task created → artifact persisted. The cloud relay handoff and
+IM delivery steps are marked TODO and skipped until phase four lands (see
+`prds/workbuddy-refactor/roadmap.md` §评测体系 L4 冒烟层).
+
+Schedule: every day at 08:00 Asia/Shanghai (UTC+8). GitHub Actions cron is
+always UTC, so the cron expression is `0 0 * * *` (00:00 UTC = 08:00 UTC+8).
+The job's failure is the alert: GitHub notifies the workflow failure. Extend
+this to file an issue via `actions/github-script` when a dedicated alerting
+channel is wanted.
+
+A failure here does not block PRs; it is a daily health check on the app
+journey that CI's app-less PR lane cannot cover.
+
+name: Daily E2E Smoke (L4)
+
+on:
+  schedule:
+    # 08:00 Asia/Shanghai (UTC+8) == 00:00 UTC. Actions cron has no timezone
+    # field, so the UTC offset is applied here and documented on the job.
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  daily-smoke-journey:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.4.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Install eval workspace
+        run: pnpm --dir evals install --frozen-lockfile --prefer-offline
+
+      - name: Run daily smoke journey
+        # xvfb gives the Electron app a display; OPENWORK_EVAL_APP_SPECS=1
+        # opts the journey steps in. Each step of the journey is independently
+        # skippable via env (see the spec header), so the job still reports a
+        # meaningful result on hosts that cannot drive part of it.
+        env:
+          OPENWORK_EVAL_APP_SPECS: "1"
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y xvfb >/dev/null 2>&1 || true
+          xvfb-run -a pnpm --dir evals exec vitest run \
+            --config vitest.config.ts --project stack \
+            specs/daily-journey.slow.test.ts
+
+      - name: Upload journey report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-smoke-journey-report
+          path: evals/results/
+          retention-days: 7

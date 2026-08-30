@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea, ScrollAreaViewport } from "@/components/ui/scroll-area";
+import { t } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 import { KnowledgeCreateDialog } from "./knowledge-create-dialog";
@@ -36,7 +37,7 @@ function sourceTypeIcon(sourceType: KnowledgeItem["sourceType"]) {
 }
 
 function sourceTypeLabel(sourceType: KnowledgeItem["sourceType"]) {
-  return sourceType === "file" ? "File" : "Text";
+  return sourceType === "file" ? t("library.source_file") : t("library.source_text");
 }
 
 function formatDate(iso: string): string {
@@ -98,7 +99,7 @@ export function KnowledgePage(props: KnowledgePageProps) {
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
           <BookOpen size={16} className="text-foreground" />
-          <h2 className="text-sm font-semibold">Knowledge</h2>
+          <h2 className="text-sm font-semibold">{t("library.tab_knowledge")}</h2>
         </div>
         <div className="flex items-center gap-1">
           {props.onClose ? (
@@ -106,8 +107,8 @@ export function KnowledgePage(props: KnowledgePageProps) {
               variant="ghost"
               size="icon-sm"
               onClick={props.onClose}
-              title="Close"
-              aria-label="Close"
+              title={t("common.close")}
+              aria-label={t("common.close")}
             >
               <X size={14} />
             </Button>
@@ -124,7 +125,7 @@ export function KnowledgePage(props: KnowledgePageProps) {
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search knowledge..."
+            placeholder={t("library.search_placeholder")}
             className="h-8 pl-9 rounded-lg"
           />
         </div>
@@ -138,7 +139,7 @@ export function KnowledgePage(props: KnowledgePageProps) {
         >
           <Button size="sm" variant="default">
             <Plus size={14} />
-            New
+            {t("library.new_knowledge")}
           </Button>
         </KnowledgeCreateDialog>
       </div>
@@ -148,8 +149,8 @@ export function KnowledgePage(props: KnowledgePageProps) {
           {filteredItems.length === 0 ? (
             <div className="px-4 py-10 text-center text-sm text-muted-foreground">
               {query
-                ? "No knowledge items match your search."
-                : "No knowledge yet. Create your first knowledge item."}
+                ? t("library.no_search_results")
+                : t("library.no_items")}
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-3 p-4 @2xl:grid-cols-2 @4xl:grid-cols-3">
@@ -182,7 +183,7 @@ export function KnowledgePage(props: KnowledgePageProps) {
                           </Badge>
                         </div>
                         <CardDescription className="line-clamp-2">
-                          {item.description || "No description."}
+                          {item.description || t("library.no_description")}
                         </CardDescription>
                       </CardHeader>
                       <CardContent>

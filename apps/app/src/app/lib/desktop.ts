@@ -27,6 +27,12 @@ export type {
   OpencodeConfigFile,
   UpdaterEnvironment,
   CacheResetResult,
+  GitStatusResult,
+  GitDiffResult,
+  GitLogResult,
+  TerminalHistoryEntry,
+  CodeSymbolResult,
+  WorkspaceRule,
 } from "./desktop-types";
 
 import type {
@@ -39,6 +45,12 @@ import type {
   DesktopCommandName,
   DesktopCommandResult,
   EvalRelaunchResult,
+  GitStatusResult,
+  GitDiffResult,
+  GitLogResult,
+  TerminalHistoryEntry,
+  CodeSymbolResult,
+  WorkspaceRule,
   NukeManifestPreview,
   NukeOptions,
   NukeReceipt,
@@ -589,6 +601,12 @@ const {
   resetOpencodeCache,
   opencodeMcpAuth,
   setWindowDecorations,
+  gitStatus,
+  gitDiff,
+  gitLog,
+  listTerminalHistory,
+  listCodeSymbols,
+  listWorkspaceRules,
 } = desktopBridge;
 
 export {
@@ -644,4 +662,10 @@ export {
   resetOpencodeCache,
   opencodeMcpAuth,
   setWindowDecorations,
+  gitStatus,
+  gitDiff,
+  gitLog,
+  listTerminalHistory,
+  listCodeSymbols,
+  listWorkspaceRules,
 };

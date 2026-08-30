@@ -5,6 +5,8 @@
   "scripts": {
     "spec": "vitest run --config vitest.config.ts --project pr",
     "spec:stack": "vitest run --config vitest.config.ts",
+    "quality": "node quality/run.ts",
+    "quality:i18n-scan": "node quality/scanners/i18n-scanner.ts",
     "roll": "node packages/evidence/bin/roll.mjs",
     "publish:pr": "node packages/evidence/bin/publish-pr.mjs",
     "dev:den": "node scripts/dev-den.ts",

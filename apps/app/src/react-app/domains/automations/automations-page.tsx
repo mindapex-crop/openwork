@@ -8,6 +8,7 @@ import {
   ArrowLeft,
   CalendarClock,
   Cloud,
+  FlaskConical,
   History,
   Monitor,
   Pencil,
@@ -29,6 +30,7 @@ import type {
 import { AUTOMATION_FREE_MODEL } from "@openwork/types/automations"
 
 import { createDenClient, DenApiError, readDenSettings } from "@/app/lib/den"
+import { t } from "@/i18n"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -53,6 +55,9 @@ import { automationExecutionThreadRoute, automationExecutionIdentity } from "./a
 import { formatAutomationSchedule, formatAutomationTime } from "./automation-format"
 import type { AutomationProviderCatalog } from "./automation-model-options"
 import { automationModelOptions, describeAutomationModel } from "./automation-model-options"
+import { AutomationTemplateCard } from "./automation-template-card"
+import { templatesByCategory } from "./automation-templates"
+import { templateToCreate } from "./automation-store"
 
 const ACTIVE_RUN_STATUSES = new Set<AutomationRun["status"]>(["queued", "claimed", "running"])
 
@@ -145,6 +150,13 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
   const [repairingModel, setRepairingModel] = useState(false)
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [archiveOpen, setArchiveOpen] = useState(false)
+  const [templateInitial, setTemplateInitial] = useState<CreateAutomation | null>(null)
+
+  const startFromTemplate = (initial: CreateAutomation | null) => {
+    setTemplateInitial(initial)
+    const next = new URLSearchParams({ create: "1" })
+    setSearchParams(next)
+  }
 
   const settings = readDenSettings()
   const organizationId = settings.activeOrgId?.trim() || null
@@ -157,6 +169,7 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
   const selectedRunId = searchParams.get("run")?.trim() || null
   const selectedThreadId = searchParams.get("thread")?.trim() || null
   const creating = searchParams.get("create") === "1"
+  const showTemplates = searchParams.get("templates") === "1"
   const ready = denAuth.isSignedIn && Boolean(client && organizationId)
   const queryRoot = ["den", "automations", organizationId]
   const zenModelRestricted = useDesktopRestriction("allowZenModel")
@@ -275,6 +288,45 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
     )
   }
 
+  if (showTemplates) {
+    const grouped = templatesByCategory()
+    return (
+      <div className="mx-auto max-w-5xl space-y-6 p-6">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" aria-label={t("automations.back")} onClick={() => openAutomation(null)}>
+            <ArrowLeft />
+          </Button>
+          <div>
+            <h2 className="text-xl font-semibold">{t("automations.choose_template")}</h2>
+            <p className="text-sm text-muted-foreground">{t("automations.choose_template_desc")}</p>
+          </div>
+        </div>
+        {Array.from(grouped.entries()).map(([category, templates]) => (
+          <div key={category} className="space-y-3">
+            <h3 className="text-sm font-medium text-muted-foreground">{category}</h3>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {templates.map((template) => (
+                <AutomationTemplateCard
+                  key={template.id}
+                  template={template}
+                  onUse={(selected) => {
+                    const initial = templateToCreate(selected, models[0] ?? AUTOMATION_FREE_MODEL)
+                    startFromTemplate(initial)
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+        <div>
+          <Button variant="outline" onClick={() => startFromTemplate(null)}>
+            <Plus />{t("automations.start_from_scratch")}
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   if (creating) {
     return (
       <div className="mx-auto max-w-3xl space-y-5 p-6">
@@ -288,6 +340,8 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
           </div>
         </div>
         <AutomationEditor
+          initial={templateInitial}
+          initialKey={templateInitial ? "template" : undefined}
           busy={busyAction === "create"}
           modelOptions={models}
           providerCatalog={props.providerCatalog}
@@ -418,6 +472,17 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
               }, "Automation queued")}
             >
               <Play />Run now
+            </Button>
+            <Button
+              variant="outline"
+              disabled={busyAction !== null || task.state === "archived" || task.state === "needs_attention"}
+              onClick={() => void act("test", async () => {
+                const run = await client.runAutomationNow(organizationId, task.id)
+                const next = new URLSearchParams({ automation: task.id, run: run.id })
+                setSearchParams(next)
+              }, t("automations.test_run_queued"))}
+            >
+              <FlaskConical />{t("automations.test_run")}
             </Button>
             <Button variant="ghost" size="icon" aria-label="Archive Automation" onClick={() => setArchiveOpen(true)}>
               <Archive />
@@ -603,16 +668,31 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold">Automations</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Scheduled durably in Den, with each Automation executed in its fixed Desktop or OpenWork Cloud location.</p>
+      {/* WorkBuddy 风格 Hero 区域 */}
+      <div className="flex items-center gap-4 rounded-2xl border border-border bg-gradient-to-br from-primary/5 via-transparent to-primary/3 px-5 py-4">
+        <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10">
+          <CalendarClock className="size-5 text-primary" />
         </div>
-        <Button onClick={() => setSearchParams(new URLSearchParams({ create: "1" }))}><Plus />New Automation</Button>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-[16px] font-semibold text-foreground">自动化工作流</h2>
+          <p className="mt-0.5 text-[12px] text-muted-foreground">
+            定时执行、持久化调度，让重复任务自动运行
+          </p>
+        </div>
+        <div className="hidden items-center gap-3 sm:flex">
+          <div className="text-center">
+            <div className="text-[18px] font-semibold text-foreground">{filteredItems.length}</div>
+            <div className="text-[10px] text-muted-foreground">活跃任务</div>
+          </div>
+          <Button size="sm" onClick={() => setSearchParams(new URLSearchParams({ templates: "1" }))}>
+            <Plus className="size-3.5" />
+            新建
+          </Button>
+        </div>
       </div>
       <div className="relative max-w-md">
         <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-        <Input className="pl-9" value={query} placeholder="Search Automations" onChange={(event) => setQuery(event.currentTarget.value)} />
+        <Input className="pl-9" value={query} placeholder="搜索自动化任务…" onChange={(event) => setQuery(event.currentTarget.value)} />
       </div>
       {filteredItems.length === 0 ? (
         <Empty>
@@ -621,7 +701,7 @@ export function AutomationsPage(props: { providerCatalog?: AutomationProviderCat
             <EmptyTitle>{query ? "No matching Automations" : "No Automations yet"}</EmptyTitle>
             <EmptyDescription>{query ? "Try a different search." : "Create a Desktop Automation here; it runs while this signed-in desktop is connected. Create headless Cloud Automations from Web or Cloud Chat."}</EmptyDescription>
           </EmptyHeader>
-          {!query ? <EmptyContent><Button onClick={() => setSearchParams(new URLSearchParams({ create: "1" }))}><Plus />New Automation</Button></EmptyContent> : null}
+          {!query ? <EmptyContent><Button onClick={() => setSearchParams(new URLSearchParams({ templates: "1" }))}><Plus />New Automation</Button></EmptyContent> : null}
         </Empty>
       ) : (
         <div className="grid gap-3 md:grid-cols-2">

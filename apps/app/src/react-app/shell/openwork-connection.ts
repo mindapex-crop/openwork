@@ -134,3 +134,23 @@ export async function resolveOpenworkConnection(): Promise<ResolvedOpenworkConne
     source,
   };
 }
+
+/**
+ * Resolve the OpenWork server API base URL (trailing slash stripped) for
+ * feature stores that fetch server routes directly (`/api/experts`,
+ * `/teams/run-simple`, `/agents`, …) instead of going through the
+ * `OpenworkServerClient`. Hardcoding a relative path breaks whenever the app
+ * origin differs from the server origin (headless-web dev serves the UI on
+ * Vite's port while the server listens elsewhere), which surfaced as
+ * "Unexpected token '<'" JSON parse errors. Falls back to a relative path
+ * when no connection is resolvable so callers degrade to today's behavior.
+ */
+export async function resolveServerApiBaseUrl(): Promise<string> {
+  try {
+    const connection = await resolveOpenworkConnection();
+    const base = connection.normalizedBaseUrl.replace(/\/+$/, "");
+    return base || "";
+  } catch {
+    return "";
+  }
+}

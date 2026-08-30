@@ -103,10 +103,18 @@ const MENTION_PILL_CLASS: Record<ComposerMentionKind, string> = {
   file: "inline-flex items-center rounded-full border border-gray-6 bg-gray-3 px-2.5 py-1 text-xs font-medium text-gray-11",
   agent: "inline-flex items-center rounded-full border border-sky-6/35 bg-sky-3/20 px-2.5 py-1 text-xs font-medium text-sky-11",
   app: "inline-flex items-center rounded-full border border-cyan-6/35 bg-cyan-3/20 px-2.5 py-1 text-xs font-medium text-cyan-11",
+  code: "inline-flex items-center rounded-full border border-violet-6/35 bg-violet-3/20 px-2.5 py-1 text-xs font-medium text-violet-11",
+  docs: "inline-flex items-center rounded-full border border-amber-6/35 bg-amber-3/20 px-2.5 py-1 text-xs font-medium text-amber-11",
+  git: "inline-flex items-center rounded-full border border-orange-6/35 bg-orange-3/20 px-2.5 py-1 text-xs font-medium text-orange-11",
+  terminal: "inline-flex items-center rounded-full border border-emerald-6/35 bg-emerald-3/20 px-2.5 py-1 text-xs font-medium text-emerald-11",
+  rules: "inline-flex items-center rounded-full border border-rose-6/35 bg-rose-3/20 px-2.5 py-1 text-xs font-medium text-rose-11",
 };
 
 function mentionPillText(value: string, kind: ComposerMentionKind) {
-  return `@${kind === "file" ? value.split(/[\\/]/).pop() || value : value}`;
+  if (kind === "file" || kind === "code") return `@${value.split(/[\\/]/).pop() || value}`;
+  if (kind === "terminal") return `@terminal:${value}`;
+  if (kind === "git" && value.startsWith("commit:")) return `@git:${value.slice(7, 14)}`;
+  return `@${value}`;
 }
 
 class ComposerMentionNode extends TextNode {

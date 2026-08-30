@@ -196,3 +196,29 @@ export function categoryCount(
 ): number {
   return entries.filter((entry) => entry.category === category).length;
 }
+
+/**
+ * 由目录条目生成可直接写入本地技能目录（.opencode/skills/<name>/SKILL.md）的
+ * 模板内容：frontmatter（name/description）+ 可执行的指令正文。
+ * 用于"技能广场一键安装"。
+ */
+export function buildSkillMarkdown(entry: Pick<SkillEntry, "name" | "description" | "suggestedTool">): string {
+  const toolHint = entry.suggestedTool
+    ? `\n- 优先配合 ${entry.suggestedTool} 相关工具使用，效果最佳。`
+    : "";
+  return `---
+name: ${entry.name}
+description: ${entry.description}
+---
+
+# Skill: ${entry.name}
+
+${entry.description}
+
+## 使用方式
+
+- 用户提出相关任务时，直接按本技能说明执行。
+- 若缺少必要上下文，先向用户澄清目标与输入。${toolHint}
+- 完成输出时保持结构化、可直接使用的形式。
+`;
+}

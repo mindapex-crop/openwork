@@ -2,6 +2,7 @@
 import type * as React from "react";
 import {
   ArrowLeft,
+  Bell,
   BrainCircuit,
   Bug,
   Cable,
@@ -36,6 +37,11 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -99,6 +105,12 @@ export function getSettingsTabIcon(tab: SettingsTab) {
       return Bug;
     case "im-connectors":
       return MessageCircle;
+    case "usage":
+      return Zap;
+    case "notifications":
+      return Bell;
+    case "about":
+      return Info;
     default:
       return Cog;
   }
@@ -107,11 +119,11 @@ export function getSettingsTabIcon(tab: SettingsTab) {
 export function getSettingsTabLabel(tab: SettingsTab) {
   switch (tab) {
     case "ai":
-      return "AI Providers";
+      return t("settings.tab_ai");
     case "preferences":
-      return "Preferences";
+      return t("settings.tab_preferences");
     case "permissions":
-      return "Permissions";
+      return t("settings.tab_permissions");
     case "cloud-account":
       return t("settings.tab_cloud_account");
     case "connect":
@@ -139,9 +151,15 @@ export function getSettingsTabLabel(tab: SettingsTab) {
     case "debug":
       return t("settings.tab_debug");
     case "im-connectors":
-      return "IM 连接器";
-    case "general":
-      return "Settings";
+      return t("settings.tab_im_connectors");
+    case "connectors":
+      return t("settings.tab_connectors");
+    case "usage":
+      return t("settings.tab_usage");
+    case "notifications":
+      return t("settings.tab_notifications");
+    case "about":
+      return t("settings.tab_about");
     default:
       return t("settings.tab_general");
   }
@@ -150,11 +168,11 @@ export function getSettingsTabLabel(tab: SettingsTab) {
 export function getSettingsTabDescription(tab: SettingsTab) {
   switch (tab) {
     case "ai":
-      return "Connect services that provide AI models";
+      return t("settings.tab_description_ai");
     case "preferences":
-      return "Default model, reasoning, and compaction";
+      return t("settings.tab_description_preferences");
     case "permissions":
-      return "Authorized folders and file access";
+      return t("settings.tab_description_permissions");
     case "cloud-account":
       return t("settings.tab_description_cloud_account");
     case "connect":
@@ -182,16 +200,20 @@ export function getSettingsTabDescription(tab: SettingsTab) {
     case "debug":
       return t("settings.tab_description_debug");
     case "im-connectors":
-      return "将 OpenWork 接入飞书、企业微信、钉钉、Slack 等消息平台";
-    case "general":
-      return "Overview of all settings";
+      return t("settings.tab_description_im_connectors");
+    case "usage":
+      return t("settings.tab_description_usage");
+    case "notifications":
+      return t("settings.tab_description_notifications");
+    case "about":
+      return t("settings.tab_description_about");
     default:
       return t("settings.tab_description_general");
   }
 }
 
 export function getWorkspaceSettingsTabs(): SettingsTab[] {
-  return ["preferences", "permissions", "extensions", "advanced"];
+  return ["connectors", "skills", "preferences", "permissions", "extensions", "advanced"];
 }
 
 export function getGlobalSettingsTabs(
@@ -207,6 +229,7 @@ export function getGlobalSettingsTabs(
 
 export const CLOUD_SETTINGS_TABS: SettingsTab[] = [
   "cloud-account",
+  "usage",
   "im-connectors",
 ];
 
@@ -340,68 +363,101 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup>
-          <SidebarGroupLabel>{t("settings.group_workspace")}</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {workspaceTabs.map((tab) => {
-                const Icon = getSettingsTabIcon(tab);
-                return (
-                  <SidebarDestination
-                    key={tab}
-                    active={isSettingsTabActive(props.activeTab, tab)}
-                    icon={Icon}
-                    label={getSettingsTabLabel(tab)}
-                    labelContent={<SettingsSidebarTabLabel tab={tab} />}
-                    onSelect={() => props.onSelectTab(tab)}
-                  />
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        <Collapsible defaultOpen className="group/collapsible">
+          <SidebarGroup>
+            <SidebarGroupLabel>
+              {t("settings.group_workspace")}
+              <CollapsibleTrigger
+                render={<button type="button" className="ml-auto rounded p-0.5 hover:bg-sidebar-accent" />}
+              >
+                <ChevronDown className="size-3.5 transition-transform group-data-[state=closed]/collapsible:-rotate-90" />
+              </CollapsibleTrigger>
+            </SidebarGroupLabel>
+            <CollapsibleContent>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {workspaceTabs.map((tab) => {
+                    const Icon = getSettingsTabIcon(tab);
+                    return (
+                      <SidebarDestination
+                        key={tab}
+                        active={isSettingsTabActive(props.activeTab, tab)}
+                        icon={Icon}
+                        label={getSettingsTabLabel(tab)}
+                        labelContent={<SettingsSidebarTabLabel tab={tab} />}
+                        onSelect={() => props.onSelectTab(tab)}
+                      />
+                    );
+                  })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </SidebarGroup>
+        </Collapsible>
 
-        <SidebarGroup>
-          <SidebarGroupLabel>{t("settings.group_global")}</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {globalTabs.map((tab) => {
-                const Icon = getSettingsTabIcon(tab);
-                return (
-                  <SidebarDestination
-                    key={tab}
-                    active={isSettingsTabActive(props.activeTab, tab)}
-                    icon={Icon}
-                    label={getSettingsTabLabel(tab)}
-                    labelContent={<SettingsSidebarTabLabel tab={tab} />}
-                    onSelect={() => props.onSelectTab(tab)}
-                  />
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        <Collapsible defaultOpen className="group/collapsible">
+          <SidebarGroup>
+            <SidebarGroupLabel>
+              {t("settings.group_global")}
+              <CollapsibleTrigger
+                render={<button type="button" className="ml-auto rounded p-0.5 hover:bg-sidebar-accent" />}
+              >
+                <ChevronDown className="size-3.5 transition-transform group-data-[state=closed]/collapsible:-rotate-90" />
+              </CollapsibleTrigger>
+            </SidebarGroupLabel>
+            <CollapsibleContent>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {globalTabs.map((tab) => {
+                    const Icon = getSettingsTabIcon(tab);
+                    return (
+                      <SidebarDestination
+                        key={tab}
+                        active={isSettingsTabActive(props.activeTab, tab)}
+                        icon={Icon}
+                        label={getSettingsTabLabel(tab)}
+                        labelContent={<SettingsSidebarTabLabel tab={tab} />}
+                        onSelect={() => props.onSelectTab(tab)}
+                      />
+                    );
+                  })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </SidebarGroup>
+        </Collapsible>
 
-        <SidebarGroup>
-          <SidebarGroupLabel>{t("settings.group_cloud")}</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {cloudTabs.map((tab) => {
-                const Icon = getSettingsTabIcon(tab);
-                return (
-                  <SidebarDestination
-                    key={tab}
-                    active={isSettingsTabActive(props.activeTab, tab)}
-                    icon={Icon}
-                    label={getSettingsTabLabel(tab)}
-                    labelContent={<SettingsSidebarTabLabel tab={tab} />}
-                    onSelect={() => props.onSelectTab(tab)}
-                  />
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        <Collapsible defaultOpen className="group/collapsible">
+          <SidebarGroup>
+            <SidebarGroupLabel>
+              {t("settings.group_cloud")}
+              <CollapsibleTrigger
+                render={<button type="button" className="ml-auto rounded p-0.5 hover:bg-sidebar-accent" />}
+              >
+                <ChevronDown className="size-3.5 transition-transform group-data-[state=closed]/collapsible:-rotate-90" />
+              </CollapsibleTrigger>
+            </SidebarGroupLabel>
+            <CollapsibleContent>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {cloudTabs.map((tab) => {
+                    const Icon = getSettingsTabIcon(tab);
+                    return (
+                      <SidebarDestination
+                        key={tab}
+                        active={isSettingsTabActive(props.activeTab, tab)}
+                        icon={Icon}
+                        label={getSettingsTabLabel(tab)}
+                        labelContent={<SettingsSidebarTabLabel tab={tab} />}
+                        onSelect={() => props.onSelectTab(tab)}
+                      />
+                    );
+                  })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </SidebarGroup>
+        </Collapsible>
       </SidebarContent>
       <SidebarRail />
     </Sidebar>

@@ -101,8 +101,10 @@ export {
   getTeamConfig,
 } from "./team.js";
 
-export { relayChain, broadcastToAll, fanOut } from "./relay.js";
+export { relayChain, broadcastToAll, fanOut, fanOutWithSynthesis } from "./relay.js";
 export { runAgentPrompt, type RunAgentPromptParams } from "./agent-runner.js";
+export { topoSortAssignments, type TopoPlan, type ScheduledAssignment } from "./scheduler.js";
+export { synthesizeResults, buildSynthesisPrompt, type SynthesisOutcome, type SynthesizeInput } from "./synthesizer.js";
 
 // 新增模块导出
 export { WorktreeManager } from "./worktree-manager.js";

@@ -5,15 +5,15 @@ import { Reorder } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-type PanelTabListProps<Value> = Omit<
+type PanelTabListProps<Value extends any[]> = Omit<
   React.ComponentProps<typeof Reorder.Group<Value, "div">>,
   "as" | "axis" | "onReorder" | "values"
 > & {
-  onReorder: (newOrder: Value[]) => void;
-  values: Value[];
+  onReorder: (newOrder: Value) => void;
+  values: Value;
 };
 
-function PanelTabList<Value>({ className, ...props }: PanelTabListProps<Value>) {
+function PanelTabList<Value extends any[]>({ className, ...props }: PanelTabListProps<Value>) {
   return (
     <Reorder.Group<Value, "div">
       as="div"

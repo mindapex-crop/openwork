@@ -13,6 +13,7 @@ import { usePlatform } from "@/react-app/kernel/platform";
 import { type ArtifactPanelTab, usePanelTabStore } from "../panel/panel-tab-store";
 import { isCollectibleArtifactTarget, type BinaryData, type Data, type OpenTarget, type TextData } from "./open-target";
 import { HTMLPreview, ImagePreview, MarkdownPreview, PdfPreview, PlainText, PreviewError, PreviewLoading, PreviewUnavailable } from "./preview";
+import { SitePreview } from "../../browser/site-preview";
 
 const ArtifactTextEditor = lazy(() =>
   import("./artifact-text-editor").then((module) => ({ default: module.ArtifactTextEditor })),
@@ -54,7 +55,7 @@ type ArtifactPanelViewProps = {
 
 type ArtifactQueryState =
   | (TextData & { updatedAt: number | null })
-  | (BinaryData & { contentType: string | null; updatedAt: number | null });
+  | (BinaryData & { contentType?: string; updatedAt: number | null });
 
 type SaveArtifactInput = Data & { baseUpdatedAt: number | null };
 
@@ -72,7 +73,11 @@ function isTextContent(target: OpenTarget): boolean {
 export function ArtifactPanel({ sessionId, tab, client, workspaceId, workspaceRoot, isRemoteWorkspace = false, onClose }: ArtifactPanelProps) {
   const transcriptTargets = usePanelTabStore((state) => state.transcriptArtifactTargets[sessionId] ?? EMPTY_TRANSCRIPT_TARGETS);
   const artifactTargets = useMemo(() => transcriptTargets.filter(isCollectibleArtifactTarget), [transcriptTargets]);
-  const target = artifactTargets.find((item) => item.id === tab.id) ?? null;
+  // 优先使用 transcript 中收集的目标；文件树/变更面板打开的任意文件不在 transcript 中，
+  // 按 tab 构造合成目标，使其也能在产物面板中预览。
+  const target = artifactTargets.find((item) => item.id === tab.id)
+    ?? syntheticTargetForTab(tab)
+    ?? null;
 
   if (!target || !client || !workspaceId) {
     return null;
@@ -88,6 +93,22 @@ export function ArtifactPanel({ sessionId, tab, client, workspaceId, workspaceRo
       onClose={onClose}
     />
   );
+}
+
+function syntheticTargetForTab(tab: ArtifactPanelTab): OpenTarget | null {
+  if (!tab.id.startsWith("file:")) return null;
+  const value = tab.id.slice("file:".length);
+  if (!value) return null;
+  return {
+    id: tab.id,
+    kind: "file",
+    value,
+    name: tab.label,
+    preview: tab.preview,
+    confidence: 100,
+    reason: "panel",
+    exists: true,
+  };
 }
 
 function ArtifactPanelView({ client, workspaceId, workspaceRoot, isRemoteWorkspace = false, target, onClose }: ArtifactPanelViewProps) {
@@ -111,7 +132,7 @@ function ArtifactPanelView({ client, workspaceId, workspaceRoot, isRemoteWorkspa
 
   const { data, error, isError, isLoading } = useQuery<ArtifactQueryState>({
     queryKey: ["artifact-panel", workspaceId, target.id, target.updatedAt ?? null] as const,
-    queryFn: async () => {
+    queryFn: async (): Promise<ArtifactQueryState> => {
       if (target.kind === "url") {
         throw new Error("URLs open in browser tabs.");
       }
@@ -127,7 +148,7 @@ function ArtifactPanelView({ client, workspaceId, workspaceRoot, isRemoteWorkspa
 
       const result = await client.downloadWorkspaceFile(workspaceId, target.value);
 
-      return { kind: "binary", data: result.data, contentType: result.contentType, updatedAt: target.updatedAt ?? null };
+      return { kind: "binary", data: result.data, contentType: result.contentType ?? undefined, updatedAt: target.updatedAt ?? null };
     },
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
@@ -181,9 +202,10 @@ function ArtifactPanelView({ client, workspaceId, workspaceRoot, isRemoteWorkspa
     onSuccess: (result, input) => {
       queryClient.setQueryData<ArtifactQueryState>(
         ["artifact-panel", workspaceId, target.id, target.updatedAt ?? null] as const,
-        input.kind === "text"
-          ? { kind: "text", data: input.data, updatedAt: result.updatedAt ?? null }
-          : { kind: "binary", data: input.data, contentType: data?.kind === "binary" ? data.contentType : null, updatedAt: result.updatedAt ?? null },
+        () => 
+          input.kind === "text"
+            ? { kind: "text", data: input.data, updatedAt: result.updatedAt ?? null }
+            : { kind: "binary", data: input.data, contentType: data?.kind === "binary" ? data.contentType : undefined, updatedAt: result.updatedAt ?? null },
       );
 
       if (input.kind === "text") {
@@ -246,6 +268,25 @@ function ArtifactPanelView({ client, workspaceId, workspaceRoot, isRemoteWorkspa
 
   const isTextEditing = data?.kind === "text" && (editing || isDirectTextEdit);
   const isDirty = data?.kind === "text" && draft !== data.data;
+  
+  const isLiveSite = useMemo(() => {
+    if (target.kind === "url") return true;
+    if (target.preview === "html" && target.kind === "file") {
+      const value = target.value.toLowerCase();
+      return value.includes("localhost:") || value.includes("127.0.0.1:") || value.endsWith(".html");
+    }
+    return false;
+  }, [target.kind, target.preview, target.value]);
+
+  const previewUrl = useMemo(() => {
+    if (target.kind === "url") return target.value;
+    if (data?.kind === "binary" && binaryObjectUrl) return binaryObjectUrl;
+    if (data?.kind === "text") {
+      const blob = new Blob([data.data], { type: "text/html" });
+      return URL.createObjectURL(blob);
+    }
+    return null;
+  }, [target.kind, target.value, data, binaryObjectUrl]);
 
   useEffect(() => {
     if (
@@ -367,6 +408,11 @@ function ArtifactPanelView({ client, workspaceId, workspaceRoot, isRemoteWorkspa
             content={data ?? { kind: "binary", data: new ArrayBuffer(0) }}
             saving={isSaving}
             onSave={saveSpreadsheetContent}
+          />
+        ) : isLiveSite && previewUrl ? (
+          <SitePreview 
+            url={previewUrl}
+            viewport="desktop"
           />
         ) : target.preview === "html" && data?.kind === "text" ? (
           <HTMLPreview type="text" title={target.name} content={data.data} />

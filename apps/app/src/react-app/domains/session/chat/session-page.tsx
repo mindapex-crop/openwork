@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { useNavigate } from "react-router";
-import { Cloud, FileText, Globe, Kanban, Mic2, MoreHorizontal, PanelRight, TextSearch, Zap } from "lucide-react";
+import { Cloud, FileText, FolderTree, GitCompareArrows, Globe, Kanban, Maximize2, Mic2, Minimize2, MoreHorizontal, PanelRight, Smartphone, TextSearch, Zap } from "lucide-react";
 
 import { resolveExtensionIconSrc } from "@/react-app/design-system/extension-icon-src";
 import { t } from "../../../../i18n";
@@ -82,14 +82,16 @@ import type { SessionNumberShortcutsState } from "../../../shell/session-number-
 import { useBootOverlayVisible } from "../../../shell/boot-state";
 
 import { isElectronRuntime } from "../../../../app/utils";
-import { isCollectibleArtifactTarget, isLocalhostBrowserTarget, isOpenableFileTarget, type OpenTarget } from "../artifacts/open-target";
+import { classifyOpenTarget, isCollectibleArtifactTarget, isLocalhostBrowserTarget, isOpenableFileTarget, type OpenTarget } from "../artifacts/open-target";
 import type { OpenTargetOptions } from "@/lib/target-provider";
 import { VoicePanel } from "../voice/voice-panel";
 import { TeamPanel } from "../team/team-mode-panel";
 import { SidePanel } from "../panel/side-panel";
 import { getSidePanelSessionKey } from "../panel/side-panel-session";
 import { TerminalDock } from "../terminal/terminal-dock";
-import { useActivePanelTab, usePanelTabStore, useSessionPanelState } from "../panel/panel-tab-store";
+import { useActivePanelTab, usePanelTabStore, useSessionPanelState, type ChangesPanelTab, type WorkspaceFilesPanelTab } from "../panel/panel-tab-store";
+import { usePermissionModeStore } from "../surface/permission-mode-store";
+import { useConversationPresenceStore } from "../chat/conversation-presence-store";
 import { useWorkspaceShellLayout } from "../../../shell/workspace-shell-layout";
 import { useControlAction, type OpenworkControlAction } from "../../../shell/control/control-provider";
 import { getExtensionId, isOpenWorkExtensionEnabled, OPENWORK_EXTENSION_STATE_CHANGED } from "../../settings/extension-state";
@@ -177,6 +179,8 @@ export type SessionPageSidebarProps = {
   onOpenMarketplace?: () => void;
   knowledgeActive?: boolean;
   onOpenKnowledge?: () => void;
+  plansActive?: boolean;
+  onOpenPlans?: () => void;
   /** Opens the cross-session message search dialog (Cmd/Ctrl+Shift+F). */
   onOpenSessionSearch?: () => void;
   onReorderWorkspaces?: (workspaceIds: string[]) => void;
@@ -245,6 +249,12 @@ export type SessionPageProps = {
   onOpenProviderAuth?: () => void;
   /** Chat-first: create a default workspace and start a task from the empty-state composer. */
   onChatFirstTask?: (prompt: string, attachments?: ComposerAttachment[]) => void;
+  /**
+   * Plan-mode hook: when the empty-state composer submits in plan mode, this
+   * is called with the prompt instead of creating a session. Wires the hero
+   * into the planning lifecycle (clarify → draft → edit → execute → complete).
+   */
+  onStartPlan?: (prompt: string) => void;
   chatFirstBusy?: boolean;
   /** Workspace-scoped wiring for the empty-state hero's full composer. */
   newTaskComposer?: NewTaskComposerContext | null;
@@ -336,6 +346,12 @@ export function SessionPage(props: SessionPageProps) {
   const platform = usePlatform();
   const denAuth = useDenAuth();
   const isMobile = useIsMobile();
+  const [forceCompactView, setForceCompactView] = useState(false);
+  // 桌面端「手机预览」：将主内容区收窄为手机视口宽度（WorkBuddy 手机端切换对标）。
+  // 仅在非真实移动端生效；真实窄窗口由 isMobile 直接驱动布局。
+  const [mobilePreview, setMobilePreview] = useState(false);
+  const effectiveCompact = isMobile || forceCompactView;
+  const mobilePreviewActive = !isMobile && mobilePreview;
   const bootOverlayVisible = useBootOverlayVisible();
   const sidebarOpen = useUiStateStore((state) => state.sidebarOpen);
   const setSidebarOpen = useUiStateStore((state) => state.setSidebarOpen);
@@ -368,6 +384,11 @@ export function SessionPage(props: SessionPageProps) {
   const artifactTargetCount = artifactFileTargets.length;
   const hasArtifactTargets = artifactTargetCount > 0;
   const hasBrowserTabs = sessionPanelState.tabs.some((tab) => tab.type === "browser");
+  // WorkBuddy 对标：未产生对话时右侧结果区（产物/工作空间文件/变更）不可展开。
+  const sessionHasConversation = useConversationPresenceStore(
+    (state) => (props.selectedSessionId ? state.bySessionId[props.selectedSessionId] === true : false),
+  );
+  const resultAreaExpandable = Boolean(props.selectedSessionId) && sessionHasConversation;
   const activeSidePanel = voiceSidePanelOpen ? "voice" : sessionSidePanel;
   const sidePanelOpen = activeSidePanel !== null;
   const panelRailActive = activeSidePanel === "panel";
@@ -650,6 +671,47 @@ export function SessionPage(props: SessionPageProps) {
       toggleCurrentSidePanel("panel");
     }
   }, [artifactFileTargets, hasArtifactTargets, openTab, panelRailActive, props.selectedSessionId, selectTab, sessionPanelState, setCurrentSidePanel, toggleCurrentSidePanel]);
+  /** 在产物面板中打开任意工作空间文件（文件树/变更面板复用）。 */
+  const openWorkspaceFile = useCallback((path: string) => {
+    const sessionId = props.selectedSessionId;
+    if (!sessionId) return;
+    const value = path.trim().replace(/^\.\//, "");
+    if (!value) return;
+    const target: OpenTarget = {
+      id: `file:${value.toLowerCase()}`,
+      kind: "file",
+      value,
+      name: value.split("/").filter(Boolean).pop() ?? value,
+      preview: classifyOpenTarget(value, "file"),
+      confidence: 100,
+      reason: "workspace file",
+      exists: true,
+    };
+    openTab(sessionId, { id: target.id, type: "artifact", label: target.name, preview: target.preview });
+    selectTab(sessionId, target.id);
+    preserveSidePanelOnPanelOpenRef.current = true;
+    setCurrentSidePanel("panel");
+  }, [openTab, props.selectedSessionId, selectTab, setCurrentSidePanel]);
+  /** 打开右侧栏固定功能面板（工作空间文件/变更，WorkBuddy 右侧结果区对标）。 */
+  const openFixedPanelTab = useCallback((tab: WorkspaceFilesPanelTab | ChangesPanelTab) => {
+    const sessionId = props.selectedSessionId;
+    if (!sessionId) return;
+    openTab(sessionId, tab);
+    selectTab(sessionId, tab.id);
+    preserveSidePanelOnPanelOpenRef.current = true;
+    setCurrentSidePanel("panel");
+  }, [openTab, props.selectedSessionId, selectTab, setCurrentSidePanel]);
+  const openWorkspaceFilesRailPane = useCallback(() => {
+    openFixedPanelTab({ id: "panel:files", type: "files", label: "工作空间文件" });
+  }, [openFixedPanelTab]);
+  const openChangesRailPane = useCallback(() => {
+    openFixedPanelTab({ id: "panel:changes", type: "changes", label: "变更" });
+  }, [openFixedPanelTab]);
+  /** 当前右侧栏激活的是否为指定固定功能面板（工作空间文件/变更）。 */
+  const activeTabIdIsFixedPanel = useCallback((kind: "files" | "changes") => {
+    const active = sessionPanelState.tabs.find((tab) => tab.id === sessionPanelState.activeTabId);
+    return active?.type === kind;
+  }, [sessionPanelState.activeTabId, sessionPanelState.tabs]);
   const openVoiceRailPane = useCallback(() => {
     toggleCurrentSidePanel("voice");
   }, [toggleCurrentSidePanel]);
@@ -709,6 +771,12 @@ export function SessionPage(props: SessionPageProps) {
       setCurrentSidePanel(null);
     }
   }, [activeSidePanel, setCurrentSidePanel, teamExtensionEnabled]);
+  // WorkBuddy 对标：未产生对话时右侧结果区不可展开 —— 已展开则收起。
+  useEffect(() => {
+    if (!resultAreaExpandable && panelRailActive) {
+      setCurrentSidePanel(null);
+    }
+  }, [panelRailActive, resultAreaExpandable, setCurrentSidePanel]);
 
   const openVoicePanelControlAction = useMemo<OpenworkControlAction | null>(() => (
     voiceExtensionEnabled ? {
@@ -749,6 +817,21 @@ export function SessionPage(props: SessionPageProps) {
     props.selectedWorkspaceDisplay.displayName?.trim() ||
     props.selectedWorkspaceDisplay.name?.trim() ||
     t("session.workspace_fallback");
+  // WorkBuddy "设置工作空间" 对标：composer 工作空间选择器的选项列表。
+  const workspaceOptions = useMemo(
+    () => props.sidebar.workspaceSessionGroups.map((group) => ({
+      id: group.workspace.id,
+      label: group.workspace.displayName?.trim()
+        || group.workspace.name?.trim()
+        || group.workspace.path?.trim()
+        || t("session.workspace_fallback"),
+      active: group.workspace.id === props.selectedWorkspaceId,
+    })),
+    [props.selectedWorkspaceId, props.sidebar.workspaceSessionGroups],
+  );
+  // WorkBuddy "权限管理：默认权限 / 完全访问" 对标。
+  const permissionMode = usePermissionModeStore((state) => state.mode);
+  const setPermissionMode = usePermissionModeStore((state) => state.setMode);
   useEffect(() => {
     if (pendingConversationHistoryNavigation) {
       if (
@@ -1131,7 +1214,7 @@ export function SessionPage(props: SessionPageProps) {
             onLayoutChanged={sidePanelOpen ? commitBrowserPanelWidth : undefined}
             className="min-h-0 flex-1 max-lg:rounded-none lg:rounded-[14px]"
           >
-            <ResizablePanel minSize={isMobile ? "0px" : "360px"} className="min-w-0">
+            <ResizablePanel minSize={effectiveCompact ? "0px" : "360px"} className="min-w-0">
               <main className="flex h-full min-w-0 flex-col overflow-hidden bg-dls-surface max-lg:rounded-none max-lg:border-0 max-lg:shadow-none lg:rounded-[14px] lg:border lg:border-border lg:shadow-[0_8px_24px_rgba(15,23,42,0.06)] dark:lg:shadow-[0_10px_30px_rgba(0,0,0,0.45)] mac:bg-dls-surface/85 mac:backdrop-blur-2xl mac:backdrop-saturate-150">
           <header className="z-10 flex h-9 shrink-0 items-center justify-between border-b border-border px-3 max-lg:h-12 lg:px-6 mac:titlebar-drag  mac:backdrop-blur-2xl mac:backdrop-saturate-150 @container/titlebar">
             <div className="flex min-w-0 items-center gap-3">
@@ -1158,6 +1241,42 @@ export function SessionPage(props: SessionPageProps) {
             </div>
 
             <div className="flex items-center gap-1.5 text-gray-10 mac:titlebar-no-drag">
+              {!isMobile ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobilePreview((v) => !v);
+                          // 预览手机视口时同步进入紧凑布局，释放主面板最小宽度约束。
+                          if (!mobilePreview) setForceCompactView(true);
+                        }}
+                        className={cn(
+                          "inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-muted hover:text-foreground",
+                          mobilePreviewActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
+                        )}
+                        aria-label={mobilePreviewActive ? "Exit mobile preview" : "Mobile preview"}
+                        aria-pressed={mobilePreviewActive}
+                      >
+                        <Smartphone size={15} />
+                      </button>
+                    }
+                  />
+                  <TooltipContent>{mobilePreviewActive ? "退出手机预览" : "手机预览"}</TooltipContent>
+                </Tooltip>
+              ) : null}
+              {isMobile ? (
+                <button
+                  type="button"
+                  onClick={() => setForceCompactView((v) => !v)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-10 transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label={forceCompactView ? "Expand view" : "Compact view"}
+                  title={forceCompactView ? "Expand view" : "Compact view"}
+                >
+                  {forceCompactView ? <Maximize2 size={14} /> : <Minimize2 size={14} />}
+                </button>
+              ) : null}
               <CollabEntryTab mode={collabMode} onClose={() => navigate("/collab-hub")} />
               {!props.primarySlot && findButtonSessionId && !hasMainContentTakeover ? (
                 <Tooltip>
@@ -1277,7 +1396,11 @@ export function SessionPage(props: SessionPageProps) {
 
           <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1 overflow-hidden">
             <ResizablePanel minSize="180px" className="min-h-0">
-            <div className="relative h-full min-w-0 overflow-hidden bg-dls-surface mac:bg-dls-surface/85 mac:backdrop-blur-2xl mac:backdrop-saturate-150">
+            <div className={cn(
+              "relative h-full min-w-0 overflow-hidden bg-dls-surface mac:bg-dls-surface/85 mac:backdrop-blur-2xl mac:backdrop-saturate-150",
+              // 手机预览：主内容区收窄为手机视口，居中展示
+              mobilePreviewActive && "mx-auto w-[390px] max-w-full border-x border-border shadow-[0_20px_60px_rgba(0,0,0,0.25)]",
+            )}>
               {props.primarySlot ? (
                 <div className="h-full overflow-y-auto" data-workspace-primary-slot>
                   {props.primarySlot}
@@ -1377,6 +1500,14 @@ export function SessionPage(props: SessionPageProps) {
                         respondQuestion={props.respondQuestion}
                         safeStringify={props.safeStringify}
                         onOpenTarget={openTarget}
+                        workspaceLabel={workspaceName}
+                        workspaceOptions={workspaceOptions}
+                        onWorkspaceSelect={(workspaceId) => {
+                          void Promise.resolve(props.sidebar.onSelectWorkspace(workspaceId));
+                        }}
+                        onOpenCreateWorkspace={props.sidebar.onOpenCreateWorkspace}
+                        permissionMode={permissionMode}
+                        onPermissionModeChange={setPermissionMode}
                       />
                     </ResizablePanel>
                     {canRenderSplitSurface ? (
@@ -1401,6 +1532,14 @@ export function SessionPage(props: SessionPageProps) {
                             openworkToken={reactSessionToken}
                             todos={[]}
                             onOpenTarget={openTarget}
+                            workspaceLabel={workspaceName}
+                            workspaceOptions={workspaceOptions}
+                            onWorkspaceSelect={(workspaceId) => {
+                              void Promise.resolve(props.sidebar.onSelectWorkspace(workspaceId));
+                            }}
+                            onOpenCreateWorkspace={props.sidebar.onOpenCreateWorkspace}
+                            permissionMode={permissionMode}
+                            onPermissionModeChange={setPermissionMode}
                           />
                         </ResizablePanel>
                       </>
@@ -1421,13 +1560,14 @@ export function SessionPage(props: SessionPageProps) {
                   ) : showWorkspaceSetupEmptyState ? (
                     // Chat-first: no workspace yet — the composer creates a
                     // default chat workspace instead of asking where to put it.
-                    <SessionEmptyHero
-                      providerCount={providerCount}
-                      busy={props.chatFirstBusy}
-                      onRunTask={(prompt, attachments) => props.onChatFirstTask?.(prompt, attachments)}
-                      onOpenProviderAuth={props.onOpenProviderAuth}
-                      composer={props.newTaskComposer}
-                    />
+<SessionEmptyHero
+providerCount={providerCount}
+busy={props.chatFirstBusy}
+onRunTask={(prompt, attachments) => props.onChatFirstTask?.(prompt, attachments)}
+onStartPlan={props.onStartPlan}
+onOpenProviderAuth={props.onOpenProviderAuth}
+composer={props.newTaskComposer}
+/>
                   ) : showSelectedWorkspaceError ? (
                     <div className="px-6 py-16">
                       <div className="mx-auto max-w-lg rounded-2xl border border-red-7/35 bg-red-1/40 p-5 text-left shadow-[var(--dls-card-shadow)]">
@@ -1475,21 +1615,22 @@ export function SessionPage(props: SessionPageProps) {
                     </div>
                   ) : (
                     <div className="flex flex-1 items-center justify-center py-16">
-                      <SessionEmptyHero
-                        providerCount={providerCount}
-                        onRunTask={(prompt, attachments) =>
-                          props.sidebar.onCreateTaskWithPrompt?.(props.selectedWorkspaceId, prompt, attachments)
-                        }
-                        onOpenProviderAuth={props.onOpenProviderAuth}
-                        composer={props.newTaskComposer}
-                      />
+<SessionEmptyHero
+providerCount={providerCount}
+onRunTask={(prompt, attachments) =>
+props.sidebar.onCreateTaskWithPrompt?.(props.selectedWorkspaceId, prompt, attachments)
+}
+onStartPlan={props.onStartPlan}
+onOpenProviderAuth={props.onOpenProviderAuth}
+composer={props.newTaskComposer}
+/>
                     </div>
                   )}
                 </div>
               ) : null}
             </div>
             </ResizablePanel>
-            {props.terminalOpen && !isMobile ? (
+            {props.terminalOpen && !isMobile && !mobilePreviewActive ? (
               <>
                 <ResizableHandle />
                 <ResizablePanel defaultSize="280px" minSize="160px" maxSize="55%" className="min-h-0">
@@ -1505,7 +1646,7 @@ export function SessionPage(props: SessionPageProps) {
 
               </main>
             </ResizablePanel>
-              {sidePanelOpen && !isMobile ? (
+              {sidePanelOpen && !isMobile && !mobilePreviewActive ? (
               <>
                 <ResizableHandle className="hidden bg-transparent lg:flex" />
                 <ResizablePanel
@@ -1539,6 +1680,7 @@ export function SessionPage(props: SessionPageProps) {
                       onClose={closeRightPane}
                       onOpenExtensions={props.settingsSlot ? () => setCurrentSidePanel("extensions") : undefined}
                       onOpenVoice={voiceExtensionEnabled ? openVoiceRailPane : undefined}
+                      onOpenFile={openWorkspaceFile}
                     />
                   ) : null}
                   </div>
@@ -1645,13 +1787,44 @@ export function SessionPage(props: SessionPageProps) {
               variant="ghost"
               size="icon-sm"
               className={cn(
-                "rounded-xl transition-colors hover:bg-muted hover:text-foreground",
+                "rounded-xl transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
+                panelRailActive && activeTabIdIsFixedPanel("files") && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
+              )}
+              onClick={openWorkspaceFilesRailPane}
+              title={resultAreaExpandable ? "工作空间文件" : "开始对话后可查看工作空间文件"}
+              aria-label={resultAreaExpandable ? "工作空间文件" : "开始对话后可查看工作空间文件"}
+              aria-pressed={panelRailActive && activeTabIdIsFixedPanel("files")}
+              disabled={!resultAreaExpandable}
+            >
+              <FolderTree size={15} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={cn(
+                "rounded-xl transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
+                panelRailActive && activeTabIdIsFixedPanel("changes") && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
+              )}
+              onClick={openChangesRailPane}
+              title={resultAreaExpandable ? "变更" : "开始对话后可查看变更"}
+              aria-label={resultAreaExpandable ? "变更" : "开始对话后可查看变更"}
+              aria-pressed={panelRailActive && activeTabIdIsFixedPanel("changes")}
+              disabled={!resultAreaExpandable}
+            >
+              <GitCompareArrows size={15} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={cn(
+                "rounded-xl transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
                 panelRailActive && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
               )}
               onClick={openArtifactRailPane}
-              title={`Artifacts (${artifactTargetCount})`}
-              aria-label={`Artifacts (${artifactTargetCount})`}
+              title={resultAreaExpandable ? `Artifacts (${artifactTargetCount})` : "开始对话后可查看产物"}
+              aria-label={resultAreaExpandable ? `Artifacts (${artifactTargetCount})` : "开始对话后可查看产物"}
               aria-pressed={panelRailActive}
+              disabled={!resultAreaExpandable}
             >
               <FileText size={15} />
               {artifactTargetCount > 0 ? (

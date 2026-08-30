@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import net from "node:net";
 import { existsSync, readFileSync } from "node:fs";
@@ -144,6 +144,265 @@ const uiControlServer = createUiControlServer({
 
 const terminalProcesses = new Map();
 let nextTerminalId = 1;
+
+// Terminal command history buffer for @Terminal mentions. Tracks the last N
+// commands seen across all PTY sessions so the renderer can surface them.
+const terminalHistoryBuffer = [];
+const MAX_TERMINAL_HISTORY = 50;
+
+function recordTerminalHistoryEntry(entry) {
+  terminalHistoryBuffer.unshift(entry);
+  if (terminalHistoryBuffer.length > MAX_TERMINAL_HISTORY) {
+    terminalHistoryBuffer.length = MAX_TERMINAL_HISTORY;
+  }
+}
+
+// Per-terminal input accumulator: captures the current command line so we can
+// record it in the history buffer when the user presses Enter.
+const terminalInputBuffers = new Map();
+
+function captureTerminalCommand(terminalId, data) {
+  if (typeof data !== "string" || !data) return;
+  let buf = terminalInputBuffers.get(terminalId);
+  if (!buf) {
+    buf = { current: "", outputChunks: [], outputTimer: null };
+    terminalInputBuffers.set(terminalId, buf);
+  }
+  // PTY sends \r (or \r\n) when the user presses Enter — the shell then
+  // echoes output back. Split on \r and \n to detect command boundaries.
+  const segments = data.split(/[\r\n]/);
+  for (let i = 0; i < segments.length; i += 1) {
+    if (i > 0) {
+      // A newline boundary means the current line was submitted as a command.
+      const line = buf.current.trim();
+      if (line) {
+        recordTerminalHistoryEntry({
+          index: terminalHistoryBuffer.length + 1,
+          command: line,
+          outputPreview: "",
+          timestamp: new Date().toISOString(),
+        });
+      }
+      buf.current = "";
+    }
+    buf.current += segments[i];
+  }
+}
+
+function appendTerminalOutput(terminalId, data) {
+  if (typeof data !== "string" || !data) return;
+  const buf = terminalInputBuffers.get(terminalId);
+  if (!buf) return;
+  buf.outputChunks.push(data);
+  // Debounce: flush the output preview to the most recent history entry after
+  // a short idle window so we don't update on every chunk.
+  if (buf.outputTimer) clearTimeout(buf.outputTimer);
+  buf.outputTimer = setTimeout(() => {
+    const preview = buf.outputChunks.join("").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").slice(0, 500);
+    buf.outputChunks = [];
+    const entry = terminalHistoryBuffer.find((e) => e.outputPreview === "" && e.command);
+    if (entry) entry.outputPreview = preview;
+  }, 300);
+}
+
+// ── Git helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Run a git command via execFile (safe, no shell injection).
+ * Resolves with { status, stdout, stderr }; rejects if git is not installed
+ * or the command fails fatally.
+ */
+function runGit(args, cwd) {
+  return new Promise((resolve) => {
+    execFile("git", args, { cwd, timeout: 15_000, maxBuffer: 5 * 1024 * 1024 }, (error, stdout, stderr) => {
+      resolve({
+        status: error ? error.code ?? 1 : 0,
+        stdout: String(stdout ?? ""),
+        stderr: String(stderr ?? ""),
+      });
+    });
+  });
+}
+
+/** @param {string} line @returns {{ path: string, status: "modified" | "added" | "deleted" | "renamed" | "untracked", staged: boolean }} */
+function parsePorcelainStatusLine(line) {
+  // porcelain v1 format: "XY PATH" or "XY ORIG -> PATH" for renames.
+  const x = line[0];
+  const y = line[1];
+  const rest = line.slice(3);
+  const staged = x !== " " && x !== "?" && x !== "!";
+  const indexStatus = x;
+  /** @type {"modified" | "added" | "deleted" | "renamed" | "untracked"} */
+  let status = "modified";
+  if (indexStatus === "M" || y === "M") status = "modified";
+  else if (indexStatus === "A" || y === "A") status = "added";
+  else if (indexStatus === "D" || y === "D") status = "deleted";
+  else if (indexStatus === "R") status = "renamed";
+  else if (indexStatus === "?" || y === "?") status = "untracked";
+  const filePath = rest.includes(" -> ") ? rest.split(" -> ").pop() : rest;
+  return { path: filePath ?? rest, status, staged };
+}
+
+async function handleGitStatus(cwd) {
+  const { stdout, status } = await runGit(["status", "--porcelain", "-b"], cwd);
+  if (status !== 0) {
+    return { branch: "", ahead: 0, behind: 0, changes: [] };
+  }
+  let branch = "";
+  let ahead = 0;
+  let behind = 0;
+  const changes = [];
+  for (const line of stdout.split("\n")) {
+    if (line.startsWith("##")) {
+      // Parse branch line: "## branch...upstream [ahead N, behind M]"
+      const branchMatch = line.slice(2).trim().match(/^(\S+?)(?:\.\.\.|$)/);
+      if (branchMatch) branch = branchMatch[1];
+      const aheadMatch = line.match(/ahead (\d+)/);
+      const behindMatch = line.match(/behind (\d+)/);
+      if (aheadMatch) ahead = Number(aheadMatch[1]);
+      if (behindMatch) behind = Number(behindMatch[1]);
+    } else if (line.trim() && line.length >= 3) {
+      changes.push(parsePorcelainStatusLine(line));
+    }
+  }
+  return { branch, ahead, behind, changes };
+}
+
+async function handleGitDiff(cwd, options) {
+  const args = options?.staged ? ["diff", "--staged"] : ["diff"];
+  if (options?.file) args.push(options.file);
+  const { stdout, status } = await runGit(args, cwd);
+  if (status !== 0) {
+    return { diff: "", fileCount: 0, additions: 0, deletions: 0 };
+  }
+  let additions = 0;
+  let deletions = 0;
+  let fileCount = 0;
+  for (const line of stdout.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff") || line.startsWith("index")) {
+      if (line.startsWith("diff --git")) fileCount += 1;
+      continue;
+    }
+    if (line.startsWith("+")) additions += 1;
+    else if (line.startsWith("-")) deletions += 1;
+  }
+  return { diff: stdout.slice(0, 10_000), fileCount, additions, deletions };
+}
+
+async function handleGitLog(cwd, options) {
+  const limit = Number.isFinite(options?.limit) ? Math.min(50, Math.max(1, Number(options.limit))) : 10;
+  const { stdout, status } = await runGit(["log", `--max-count=${limit}`, `--format=%H%n%h%n%s%n%an%n%ai%n---`], cwd);
+  if (status !== 0) {
+    return { commits: [] };
+  }
+  const commits = [];
+  const blocks = stdout.split("---\n").filter((b) => b.trim());
+  for (const block of blocks) {
+    const lines = block.split("\n");
+    const hash = lines[0]?.trim() ?? "";
+    const shortHash = lines[1]?.trim() ?? "";
+    const message = lines[2]?.trim() ?? "";
+    const author = lines[3]?.trim() ?? "";
+    const date = lines[4]?.trim() ?? "";
+    if (hash) commits.push({ hash, shortHash, message, author, date });
+  }
+  return { commits };
+}
+
+// ── Code symbols helper ──────────────────────────────────────────────────
+
+/** @type {Array<{ pattern: RegExp, kind: "function" | "class" | "const" | "export" }>} */
+const CODE_SYMBOL_PATTERNS = [
+  { pattern: /(?:^|\n)\s*export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g, kind: "export" },
+  { pattern: /(?:^|\n)\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g, kind: "function" },
+  { pattern: /(?:^|\n)\s*export\s+(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/g, kind: "export" },
+  { pattern: /(?:^|\n)\s*(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/g, kind: "class" },
+  { pattern: /(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g, kind: "const" },
+];
+
+/**
+ * @param {string} cwd
+ * @param {string[]} filePaths
+ * @returns {Promise<Array<{ filePath: string, symbols: Array<{ name: string, kind: "function" | "class" | "const" | "export", line: number }> }>>}
+ */
+async function handleListCodeSymbols(cwd, filePaths) {
+  const results = [];
+  for (const filePath of filePaths) {
+    if (typeof filePath !== "string" || !filePath.trim()) continue;
+    const absolutePath = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+    let content;
+    try {
+      content = await readFile(absolutePath, "utf8");
+    } catch {
+      continue;
+    }
+    const symbols = [];
+    for (const { pattern, kind } of CODE_SYMBOL_PATTERNS) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(content)) !== null) {
+        const name = match[1];
+        if (!name) continue;
+        const line = content.slice(0, match.index).split("\n").length;
+        symbols.push({ name, kind, line });
+      }
+    }
+    if (symbols.length > 0) {
+      results.push({ filePath: absolutePath, symbols });
+    }
+  }
+  return results;
+}
+
+// ── Workspace rules helper ───────────────────────────────────────────────
+
+function parseRuleFrontmatter(content) {
+  // Simple YAML-ish frontmatter parser: expects --- delimiters.
+  const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!match) return {};
+  const frontmatter = {};
+  for (const line of match[1].split("\n")) {
+    const colonIndex = line.indexOf(":");
+    if (colonIndex === -1) continue;
+    const key = line.slice(0, colonIndex).trim();
+    const value = line.slice(colonIndex + 1).trim().replace(/^["']|["']$/g, "");
+    frontmatter[key] = value;
+  }
+  return frontmatter;
+}
+
+/**
+ * @param {string} cwd
+ * @returns {Promise<Array<{ name: string, description: string, ruleType: "always" | "requested" | "manual", filePath: string }>>}
+ */
+async function handleListWorkspaceRules(cwd) {
+  const rulesDir = path.join(cwd, ".openwork", "rules");
+  let entries;
+  try {
+    entries = await readdir(rulesDir);
+  } catch {
+    return [];
+  }
+  /** @type {Array<{ name: string, description: string, ruleType: "always" | "requested" | "manual", filePath: string }>} */
+  const rules = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".md")) continue;
+    const filePath = path.join(rulesDir, entry);
+    let content;
+    try {
+      content = await readFile(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const fm = parseRuleFrontmatter(content);
+    const name = fm.name ?? entry.replace(/\.md$/, "");
+    const description = fm.description ?? "";
+    const rawType = (fm.type ?? "always").toLowerCase();
+    const ruleType = rawType === "requested" ? "requested" : rawType === "manual" ? "manual" : "always";
+    rules.push({ name, description, ruleType, filePath });
+  }
+  return rules;
+}
 
 function defaultTerminalShell() {
   if (process.platform === "win32") return process.env.COMSPEC || "powershell.exe";
@@ -2222,6 +2481,50 @@ const desktopCommandHandlers = {
   "__setApplicationMenuVisible": async (event, ...args) => {
       return applicationMenu.setVisible(args[0]);
   },
+
+  // Git integration (@Git mentions)
+  "gitStatus": async (event, ...args) => {
+      const cwd = String(args[0] ?? "").trim();
+      if (!cwd) return { branch: "", ahead: 0, behind: 0, changes: [] };
+      return handleGitStatus(cwd);
+  },
+  "gitDiff": async (event, ...args) => {
+      const cwd = String(args[0] ?? "").trim();
+      if (!cwd) return { diff: "", fileCount: 0, additions: 0, deletions: 0 };
+      const options = args[1] ?? {};
+      return handleGitDiff(cwd, options);
+  },
+  "gitLog": async (event, ...args) => {
+      const cwd = String(args[0] ?? "").trim();
+      if (!cwd) return { commits: [] };
+      const options = args[1] ?? {};
+      return handleGitLog(cwd, options);
+  },
+
+  // Terminal history (@Terminal mentions)
+  "listTerminalHistory": async (event, ...args) => {
+      const limit = Number.isFinite(args[0]) ? Math.min(MAX_TERMINAL_HISTORY, Math.max(1, Number(args[0]))) : MAX_TERMINAL_HISTORY;
+      // Re-index entries 1..N for the renderer.
+      return terminalHistoryBuffer.slice(0, limit).map((entry, i) => ({
+        ...entry,
+        index: i + 1,
+      }));
+  },
+
+  // Code symbols (@Code mentions)
+  "listCodeSymbols": async (event, ...args) => {
+      const cwd = String(args[0] ?? "").trim();
+      const filePaths = Array.isArray(args[1]) ? args[1] : [];
+      if (!cwd || filePaths.length === 0) return [];
+      return handleListCodeSymbols(cwd, filePaths);
+  },
+
+  // Workspace rules (@Rules mentions)
+  "listWorkspaceRules": async (event, ...args) => {
+      const cwd = String(args[0] ?? "").trim();
+      if (!cwd) return [];
+      return handleListWorkspaceRules(cwd);
+  },
 };
 
 if (isDevMode) {
@@ -2508,10 +2811,15 @@ ipcMain.handle("openwork:terminal:create", async (event, options = {}) => {
   event.sender.once("destroyed", () => killTerminalsForWebContents(event.sender.id));
   child.onData((data) => {
     if (event.sender.isDestroyed()) return;
+    appendTerminalOutput(terminalId, data);
     event.sender.send("openwork:terminal:data", { terminalId, data });
   });
   child.onExit(({ exitCode, signal }) => {
     terminalProcesses.delete(terminalId);
+    terminalInputBuffers.delete(terminalId);
+    // Tag the most recent history entry from this session with its exit code.
+    const recentEntry = terminalHistoryBuffer.find((e) => e.exitCode === undefined);
+    if (recentEntry) recentEntry.exitCode = exitCode;
     if (event.sender.isDestroyed()) return;
     event.sender.send("openwork:terminal:exit", { terminalId, exitCode, signal });
   });
@@ -2521,6 +2829,7 @@ ipcMain.handle("openwork:terminal:create", async (event, options = {}) => {
 ipcMain.handle("openwork:terminal:write", (event, terminalId, data) => {
   const terminal = terminalForSender(event, terminalId);
   if (!terminal || typeof data !== "string") return;
+  captureTerminalCommand(terminalId, data);
   terminal.process.write(data);
 });
 ipcMain.handle("openwork:terminal:resize", (event, terminalId, cols, rows) => {

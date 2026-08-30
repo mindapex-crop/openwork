@@ -1,11 +1,11 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import { isCollectibleArtifactTarget, type OpenTarget, type OpenTargetPreview } from "../artifacts/open-target";
+import { isCollectibleArtifactTarget, type FileChange, type OpenTarget, type OpenTargetPreview } from "../artifacts/open-target";
 
 export const PERSISTED_PANEL_TAB_STORE_KEY = "openwork:panel-tabs:v1";
 
-export type PanelTabType = "artifact" | "browser";
+export type PanelTabType = "artifact" | "browser" | "files" | "changes";
 
 export type { BrowserPanelTab } from "../../../../app/lib/desktop-types";
 import type { BrowserPanelTab } from "../../../../app/lib/desktop-types";
@@ -17,7 +17,21 @@ export type ArtifactPanelTab = {
   preview: OpenTargetPreview;
 }
 
-export type PanelTab = BrowserPanelTab | ArtifactPanelTab;
+/** 工作空间文件面板（WorkBuddy 右侧"工作空间文件"区对标，固定单实例）。 */
+export type WorkspaceFilesPanelTab = {
+  id: "panel:files";
+  type: "files";
+  label: string;
+}
+
+/** 变更面板（WorkBuddy 右侧"变更"区对标，固定单实例）。 */
+export type ChangesPanelTab = {
+  id: "panel:changes";
+  type: "changes";
+  label: string;
+}
+
+export type PanelTab = BrowserPanelTab | ArtifactPanelTab | WorkspaceFilesPanelTab | ChangesPanelTab;
 
 export type SessionPanelState = {
   tabs: PanelTab[];
@@ -41,6 +55,7 @@ type PersistedPanelTabStore = {
 export type PanelTabStore = {
   sessions: Record<string, SessionPanelState>;
   transcriptArtifactTargets: Record<string, OpenTarget[]>;
+  transcriptFileChanges: Record<string, FileChange[]>;
   openTab: (sessionId: string, tab: PanelTab) => void;
   closeTab: (sessionId: string, tabId: string) => void;
   selectTab: (sessionId: string, tabId: string) => void;
@@ -51,6 +66,7 @@ export type PanelTabStore = {
     targets: Array<{ id: string; name: string; preview: OpenTargetPreview }>,
   ) => void;
   syncTranscriptArtifacts: (sessionId: string, targets: OpenTarget[]) => void;
+  syncTranscriptChanges: (sessionId: string, changes: FileChange[]) => void;
   clearSession: (sessionId: string) => void;
 };
 
@@ -152,6 +168,10 @@ function isSameTab(left: PanelTab, right: PanelTab) {
     );
   }
 
+  if ((left.type === "files" && right.type === "files") || (left.type === "changes" && right.type === "changes")) {
+    return left.id === right.id && left.label === right.label;
+  }
+
   return false;
 }
 
@@ -210,6 +230,7 @@ export const usePanelTabStore = create<PanelTabStore>()(
     (set, get) => ({
       sessions: {},
       transcriptArtifactTargets: {},
+      transcriptFileChanges: {},
       openTab: (sessionId, tab) => set((state) => {
         const session = getWritableSession(state, sessionId);
         const existingIndex = session.tabs.findIndex((entry) => entry.id === tab.id);
@@ -281,7 +302,9 @@ export const usePanelTabStore = create<PanelTabStore>()(
         const mergedTabs: PanelTab[] = [];
 
         for (const tab of session.tabs) {
-          if (tab.type === "artifact") {
+          // 固定功能面板（工作空间文件/变更）与产物 tab 跨浏览器同步保留；
+          // 否则 Electron 下 SidePanel 挂载时的浏览器同步会把它们清掉。
+          if (tab.type === "artifact" || tab.type === "files" || tab.type === "changes") {
             mergedTabs.push(tab);
             continue;
           }
@@ -352,9 +375,28 @@ export const usePanelTabStore = create<PanelTabStore>()(
           sessions: sessionUpdate?.sessions ?? state.sessions,
         };
       }),
+      syncTranscriptChanges: (sessionId, changes) => set((state) => {
+        const current = state.transcriptFileChanges[sessionId] ?? [];
+        if (
+          current.length === changes.length &&
+          current.every((entry, index) => {
+            const next = changes[index];
+            return next && entry.id === next.id && entry.updatedAt === next.updatedAt && entry.action === next.action;
+          })
+        ) {
+          return state;
+        }
+        return {
+          transcriptFileChanges: {
+            ...state.transcriptFileChanges,
+            [sessionId]: changes,
+          },
+        };
+      }),
       clearSession: (sessionId) => set((state) => {
         const nextSessions = { ...state.sessions };
         const nextTranscriptArtifactTargets = { ...state.transcriptArtifactTargets };
+        const nextTranscriptFileChanges = { ...state.transcriptFileChanges };
         
         let changed = false;
 
@@ -368,6 +410,11 @@ export const usePanelTabStore = create<PanelTabStore>()(
           changed = true;
         }
 
+        if (state.transcriptFileChanges[sessionId]) {
+          delete nextTranscriptFileChanges[sessionId];
+          changed = true;
+        }
+
         if (!changed) {
           return state;
         }
@@ -375,6 +422,7 @@ export const usePanelTabStore = create<PanelTabStore>()(
         return {
           sessions: nextSessions,
           transcriptArtifactTargets: nextTranscriptArtifactTargets,
+          transcriptFileChanges: nextTranscriptFileChanges,
         };
       }),
     }),

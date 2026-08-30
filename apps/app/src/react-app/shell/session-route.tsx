@@ -91,15 +91,30 @@ import {
 } from "@/react-app/shell/route-workspaces";
 import { useLocal } from "@/react-app/kernel/local-provider";
 import { usePlatform } from "@/react-app/kernel/platform";
+import { PageErrorBoundary } from "./page-error-boundary";
 import { SessionPage, type OpenSessionTab } from "@/react-app/domains/session/chat/session-page";
+import type { SessionSurfaceProps } from "@/react-app/domains/session/surface/session-surface";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
+import { PlanPage } from "@/react-app/domains/plan";
 import { ProjectsPage } from "@/react-app/domains/projects";
-import { SkillMarketplacePage } from "@/react-app/domains/skills";
 import { MarketplacePage } from "@/react-app/domains/marketplace/marketplace-page";
 import { KnowledgePage } from "@/react-app/domains/knowledge/knowledge-page";
+import { LibraryPage } from "@/react-app/domains/knowledge/library-page";
+import { InspirationPage } from "@/react-app/domains/inspiration/inspiration-page";
+import { CollabHubPage } from "@/react-app/domains/collab";
+import { readWorkMode } from "@/react-app/domains/onboarding/work-mode";
 import { automationsStateChangedEvent } from "@/react-app/domains/automations/automation-events";
 import type { NewTaskComposerContext, TaskMode } from "@/react-app/domains/session/chat/new-task-composer";
+import { usePermissionModeStore } from "@/react-app/domains/session/surface/permission-mode-store";
 import { frameTaskPrompt, resolveTaskModeVariant } from "@/react-app/domains/session/chat/new-task-composer";
+import { frameCapabilityPrompt } from "@/react-app/domains/session/surface/composer/composer-capabilities";
+import {
+  hasComposerCapabilities,
+  resolveCapabilityContext,
+  useComposerCapabilityStore,
+} from "@/react-app/domains/session/surface/composer/composer-capability-store";
+import { advanceSessionGoalTurn, applyGoalCommand, getSessionGoal } from "@/react-app/domains/session/surface/composer/composer-goal-store";
+import { buildGoalSystemBlock, formatGoalProgress, parseGoalCommand } from "@/react-app/domains/session/surface/composer/composer-goal";
 import { isDesktopProviderBlocked } from "@/app/cloud/desktop-app-restrictions";
 import { useCheckDesktopRestriction } from "@/react-app/domains/cloud/desktop-config-provider";
 import { useRestrictionNotice } from "@/react-app/domains/cloud/restriction-notice-provider";
@@ -233,6 +248,13 @@ import {
   useProviderListQuery,
 } from "@/react-app/infra/provider-list-query";
 
+const GOAL_TRANSITION_TOAST_KEYS: Record<"clear" | "complete" | "block" | "resume", string> = {
+  clear: "composer.goal_cleared",
+  complete: "composer.goal_completed",
+  block: "composer.goal_blocked",
+  resume: "composer.goal_resumed",
+};
+
 /**
  * Serialize an SDK error value into a string that parseSessionError can parse.
  * Preserves the original shape (name, data, message) as JSON when possible,
@@ -251,6 +273,16 @@ function serializeSDKError(error: unknown): string {
     }
   }
   return String(error);
+}
+
+/** 内联占位页：简单居中标题 + 说明（阶段一占位，后续由对应模块页面接管）。 */
+function ModulePlaceholder({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 p-8 text-center">
+      <h2 className="text-lg font-semibold text-foreground">{title}</h2>
+      <p className="max-w-sm text-sm leading-6 text-muted-foreground">{description}</p>
+    </div>
+  );
 }
 
 function describeTaskCreateError(error: unknown) {
@@ -478,21 +510,50 @@ export function SessionRoute() {
   const denAuth = useDenAuth();
   const { config: shellConfig } = useShellConfig();
   const local = useLocal();
-  const automationsEnabled = isDesktopRuntime();
+  const automationsEnabled = isDesktopRuntime() || true;
   const automationsRouteActive = automationsEnabled && automationsRouteRequested;
+  const plansRouteRequested = /^\/plans(?:\/|$)/.test(location.pathname);
+  const plansRouteActive = plansRouteRequested;
   const projectsRouteRequested = /^\/projects(?:\/|$)/.test(location.pathname);
   const skillsRouteRequested = /^\/skills(?:\/|$)/.test(location.pathname);
   const marketplaceRouteRequested = /^\/marketplace(?:\/|$)/.test(location.pathname);
   const knowledgeRouteRequested = /^\/knowledge(?:\/|$)/.test(location.pathname);
+  const expertsRouteRequested = /^\/experts(?:\/|$)/.test(location.pathname);
+  const inspirationRouteRequested = /^\/inspiration(?:\/|$)/.test(location.pathname);
+  const libraryRouteRequested = /^\/library(?:\/|$)/.test(location.pathname);
+  const connectorsRouteRequested = /^\/connectors(?:\/|$)/.test(location.pathname);
   const projectsRouteActive = projectsRouteRequested;
   const skillsRouteActive = skillsRouteRequested;
   const marketplaceRouteActive = marketplaceRouteRequested;
   const knowledgeRouteActive = knowledgeRouteRequested;
+  const expertsRouteActive = expertsRouteRequested;
+  const inspirationRouteActive = inspirationRouteRequested;
+  const libraryRouteActive = libraryRouteRequested;
+  const connectorsRouteActive = connectorsRouteRequested;
   const collabRouteRequested = /^\/collab-hub(?:\/|$)/.test(location.pathname);
   const collabRouteActive = collabRouteRequested;
+  // primarySlot must be null when no special route is active — a truthy React
+  // element (even one that renders null inside) blocks the SessionEmptyHero
+  // and SessionSurface from mounting.
+  const hasPrimarySlotRoute = plansRouteActive || projectsRouteActive || knowledgeRouteActive || marketplaceRouteActive || skillsRouteActive || automationsRouteActive || connectorsRouteActive || libraryRouteActive || expertsRouteActive || inspirationRouteActive || collabRouteActive;
   const denSettings = readDenSettings();
-  const [automationsSupported, setAutomationsSupported] = useState(false);
   const [automationsNeedAttention, setAutomationsNeedAttention] = useState(false);
+
+  // Debug: log route changes
+  useEffect(() => {
+    const activeRoute = plansRouteActive ? "plans"
+      : projectsRouteActive ? "projects"
+      : knowledgeRouteActive ? "knowledge"
+      : marketplaceRouteActive ? "marketplace"
+      : skillsRouteActive ? "skills"
+      : automationsRouteActive ? "automations"
+      : connectorsRouteActive ? "connectors"
+      : libraryRouteActive ? "library"
+      : expertsRouteActive ? "experts"
+      : inspirationRouteActive ? "inspiration"
+      : "session";
+    console.log("[SessionRoute] pathname:", location.pathname, "active:", activeRoute);
+  }, [location.pathname, plansRouteActive, projectsRouteActive, knowledgeRouteActive, marketplaceRouteActive, skillsRouteActive, automationsRouteActive, connectorsRouteActive, libraryRouteActive, expertsRouteActive, inspirationRouteActive]);
   useEffect(() => {
     if (!automationsRouteRequested || automationsEnabled) return;
     navigate("/", { replace: true });
@@ -501,7 +562,6 @@ export function SessionRoute() {
     const authToken = denSettings.authToken?.trim();
     const organizationId = denSettings.activeOrgId?.trim();
     if (!automationsEnabled || !denAuth.isSignedIn || !authToken || !organizationId) {
-      setAutomationsSupported(false);
       setAutomationsNeedAttention(false);
       return;
     }
@@ -511,12 +571,10 @@ export function SessionRoute() {
       void client.listAutomations(organizationId, { limit: 100 })
         .then((result) => {
           if (cancelled) return;
-          setAutomationsSupported(true);
           setAutomationsNeedAttention(result.items.some((item) => item.automation.state === "needs_attention"));
         })
         .catch(() => {
           if (cancelled) return;
-          setAutomationsSupported(false);
           setAutomationsNeedAttention(false);
         });
     };
@@ -536,7 +594,9 @@ export function SessionRoute() {
     denSettings.authToken,
     denSettings.baseUrl,
   ]);
-  const automationsNavigationAvailable = automationsEnabled && automationsSupported;
+  // WorkBuddy 对标：自动化入口在桌面运行时常驻侧边栏；
+  // 未登录 Den 时点击进入页面会展示登录引导（AutomationsPage 已内置空态）。
+  const automationsNavigationAvailable = automationsEnabled;
   const reloadCoordinator = useReloadCoordinator();
   const checkDesktopRestriction = useCheckDesktopRestriction();
   const restrictionNotice = useRestrictionNotice();
@@ -546,6 +606,8 @@ export function SessionRoute() {
 
   const [developerMode, setDeveloperMode] = useState(() => {
     if (typeof window === "undefined") return false;
+    // 日常办公模式默认隐藏开发者元素（设置页可切换工作模式重新开启）。
+    if (readWorkMode() === "daily") return false;
     return window.localStorage.getItem("openwork.developerMode") === "1";
   });
   const {
@@ -1282,26 +1344,13 @@ export function SessionRoute() {
 
   const extensionsMainOpen = /^\/(?:workspace\/[^/]+\/)?extensions(?:\/|$)/.test(location.pathname);
 
-  const surfaceProps = useMemo(() => {
-    if (!client || !selectedWorkspaceId || !selectedSessionId || !opencodeBaseUrl || !token || !opencodeClient) {
-      return null;
-    }
+  // 智能体 / 连接器的管理入口：复用已收敛到 MarketplacePage 的路由与默认 tab。
+  const handleOpenCapabilityManager = useCallback((kind: "experts" | "connectors") => {
+    navigate(kind === "experts" ? "/experts" : "/connectors");
+  }, [navigate]);
 
-    // Transient-safety: when the user switches workspaces the URL-driven
-    // selectedSessionId may still point at a session from the old workspace
-    // for one render tick. Only block rendering when we KNOW the session
-    // belongs to a different workspace (i.e., it exists in another
-    // workspace's list). A brand-new session that hasn't been refreshed
-    // into any list yet must still render so "New task" feels instant.
-    let sessionOwnedByOtherWorkspace = false;
-    for (const [workspaceId, sessions] of Object.entries(sessionsByWorkspaceId)) {
-      if (workspaceId === selectedWorkspaceId) continue;
-      if ((sessions ?? []).some((session) => session?.id === selectedSessionId)) {
-        sessionOwnedByOtherWorkspace = true;
-        break;
-      }
-    }
-    if (sessionOwnedByOtherWorkspace) {
+  const buildSurfaceBase = useCallback(() => {
+    if (!client || !selectedWorkspaceId || !opencodeBaseUrl || !token || !opencodeClient) {
       return null;
     }
 
@@ -1354,9 +1403,47 @@ export function SessionRoute() {
         }
         handleOpenExtensions(section === "skills" ? "skills" : section === "mcps" ? "mcps" : section === "plugins" ? "plugins" : "");
       },
+      onOpenCapabilityManager: handleOpenCapabilityManager,
       onSendDraft: async (draft: ComposerDraft, sessionId: string): Promise<CloudMcpSubmissionResult> => {
         const targetSessionId = sessionId.trim() || selectedSessionId;
         if (!targetSessionId) return { outcome: "cancelled", reason: "context_changed" };
+        // 会话级目标（对标 Qoder 的目标语义）：客户端命令，绝不发给后端。
+        if (draft.command?.name === "goal") {
+          // 任务模式框定会在目标后追加多行前缀；只取首行，保证目标干净。
+          const goalArg = (draft.command.arguments ?? "").split("\n")[0];
+          const command = parseGoalCommand(goalArg);
+          const current = getSessionGoal(targetSessionId);
+          if (command.kind === "status") {
+            if (!current) {
+              toast.info(t("composer.goal_usage"));
+            } else if (current.status === "complete") {
+              toast.info(t("composer.goal_status_complete", { goal: current.objective }));
+            } else if (current.status === "blocked") {
+              toast.info(t("composer.goal_status_blocked", {
+                goal: current.objective,
+                progress: formatGoalProgress(current),
+              }));
+            } else {
+              toast.info(t("composer.goal_status_active", {
+                goal: current.objective,
+                progress: formatGoalProgress(current),
+              }));
+            }
+          } else if (!current && command.kind !== "set") {
+            toast.info(t("composer.goal_no_active"));
+          } else {
+            applyGoalCommand(targetSessionId, command);
+            if (command.kind === "set") {
+              const { objective, maxTurns } = command.goal;
+              toast.success(maxTurns === null
+                ? t("composer.goal_set", { goal: objective })
+                : t("composer.goal_set_budget", { goal: objective, turns: maxTurns }));
+            } else {
+              toast.success(t(GOAL_TRANSITION_TOAST_KEYS[command.kind]));
+            }
+          }
+          return { outcome: "handled" };
+        }
         const text = (draft.resolvedText ?? draft.text).trim();
         if (!text && draft.attachments.length === 0) {
           return { outcome: "cancelled", reason: "context_changed" };
@@ -1391,6 +1478,13 @@ export function SessionRoute() {
                   model_id: sendModel?.modelID ?? null,
                 });
                 markTaskRunStart(targetSessionId);
+                // 目标轮次预算：本轮计入用量；用满预算的那一轮仍是有效工作轮，
+                // 再发一轮才受阻（见 advanceGoalTurn）。受阻的那一刻提示用户。
+                const goalBeforeTurn = getSessionGoal(targetSessionId);
+                const goalAfterTurn = advanceSessionGoalTurn(targetSessionId);
+                if (goalBeforeTurn?.status === "active" && goalAfterTurn?.status === "blocked") {
+                  toast.warning(t("composer.goal_blocked_by_budget", { goal: goalAfterTurn.objective }));
+                }
                 // Den org adoption signals (auth-gated inside; no-op when signed out).
                 // This remains inside the post-readiness send closure so a blocked
                 // Cloud submission cannot create a run or report that one started.
@@ -1437,13 +1531,16 @@ export function SessionRoute() {
                   cacheKey: targetSessionId,
                   runtimeKey: environmentRuntimeKey,
                 });
+                // 会话级目标跨轮持续注入 system 上下文；状态与轮次进度随每轮变化。
+                const goalSystemBlock = buildGoalSystemBlock(getSessionGoal(targetSessionId));
+                const combinedSystem = [envSystemContext, goalSystemBlock].filter(Boolean).join("\n\n") || undefined;
                 const result = await opencodeClient.session.promptAsync({
                   sessionID: targetSessionId,
                   parts,
                   model: sendModel ?? undefined,
                   agent: selectedAgent ?? undefined,
                   ...(sendVariant ? { variant: sendVariant } : {}),
-                  ...(envSystemContext ? { system: envSystemContext } : {}),
+                  ...(combinedSystem ? { system: combinedSystem } : {}),
                 });
                 if (result.error) {
                   throw new Error(serializeSDKError(result.error));
@@ -1485,6 +1582,8 @@ export function SessionRoute() {
       onModelVariantChange: (value: string | null) => {
         local.setPrefs((previous) => ({ ...previous, modelVariant: value }));
       },
+      taskMode,
+      onTaskModeChange: setTaskMode,
       agentLabel: selectedAgent ? selectedAgent.charAt(0).toUpperCase() + selectedAgent.slice(1) : t("session.default_agent"),
       selectedAgent,
       agentIsCli: selectedAgentIsCli,
@@ -1607,8 +1706,77 @@ export function SessionRoute() {
     selectedWorkspaceRoot,
     sessionsByWorkspaceId,
     submitWithCloudMcpReadiness,
+    taskMode,
     token,
   ]);
+
+  const surfaceProps = useMemo(() => {
+    if (!selectedSessionId) {
+      return null;
+    }
+    // Transient-safety: when the user switches workspaces the URL-driven
+    // selectedSessionId may still point at a session from the old workspace
+    // for one render tick. Only block rendering when we KNOW the session
+    // belongs to a different workspace (i.e., it exists in another
+    // workspace's list). A brand-new session that hasn't been refreshed
+    // into any list yet must still render so "New task" feels instant.
+    let sessionOwnedByOtherWorkspace = false;
+    for (const [workspaceId, sessions] of Object.entries(sessionsByWorkspaceId)) {
+      if (workspaceId === selectedWorkspaceId) continue;
+      if ((sessions ?? []).some((session) => session?.id === selectedSessionId)) {
+        sessionOwnedByOtherWorkspace = true;
+        break;
+      }
+    }
+    if (sessionOwnedByOtherWorkspace) {
+      return null;
+    }
+    return buildSurfaceBase();
+  }, [buildSurfaceBase, selectedSessionId, selectedWorkspaceId, sessionsByWorkspaceId]);
+
+  const getProjectThreadSurface = useCallback((threadId: string): SessionSurfaceProps | null => {
+    const base = buildSurfaceBase();
+    const endpointClient = selectedWorkspaceEndpoint?.client ?? client;
+    if (!base || !endpointClient) return null;
+    const workspaceId = selectedWorkspaceEndpoint?.workspaceId || selectedWorkspaceId;
+    const workspaceToken =
+      selectedWorkspaceServerToken?.trim() || endpointClient.token?.trim() || "";
+    return {
+      ...base,
+      client: endpointClient,
+      environmentClient: client,
+      workspaceId,
+      sessionId: threadId,
+      isControlTarget: true,
+      opencodeBaseUrl,
+      openworkToken: workspaceToken,
+      todos: [],
+    };
+  }, [
+    buildSurfaceBase,
+    client,
+    selectedWorkspaceEndpoint,
+    selectedWorkspaceId,
+    selectedWorkspaceServerToken,
+    opencodeBaseUrl,
+  ]);
+
+  const createProjectThread = useCallback(async (): Promise<string | null> => {
+    if (!opencodeClient || !selectedWorkspaceId) return null;
+    try {
+      const session = unwrap(
+        await opencodeClient.session.create({ directory: selectedWorkspaceRoot || undefined }),
+      );
+      if (session?.id) {
+        rememberPendingCreatedSession(selectedWorkspaceId, session.id);
+      }
+      return session?.id ?? null;
+    } catch (error) {
+      console.warn("[project-thread] create failed", error);
+      return null;
+    }
+  }, [opencodeClient, selectedWorkspaceId, selectedWorkspaceRoot, rememberPendingCreatedSession]);
+
   const cloudWorkspaceMainContentDecision = mapCloudWorkspaceMainContentDecision({
     status: cloudWorkspace.viewModel.variant,
     hasWorkspaces: Boolean(surfaceProps),
@@ -1628,6 +1796,76 @@ export function SessionRoute() {
   // the same skills/commands/agent/model controls before the session is
   // created. Model and agent choices land in the same route-level state the
   // session composer reads, so they carry into the created session.
+  // Workspace switching shared by the sidebar and the composer workspace
+  // selector (WorkBuddy "设置工作空间" 对标).
+  const handleSelectWorkspace = useCallback(async (workspaceId: string): Promise<boolean> => {
+    if (workspaceId === selectedWorkspaceId) return true;
+    setLegacySelectedWorkspaceId(workspaceId);
+    writeActiveWorkspaceId(workspaceId || null);
+    const workspace = workspaces.find((item) => item.id === workspaceId);
+    if (client && workspace && !sessionsByWorkspaceId[workspaceId]?.length) {
+      setRetryingWorkspaceIds((current) => Array.from(new Set([...current, workspaceId])));
+      void loadWorkspaceSessionsInBackground([workspace]);
+    }
+    // Fire Tauri updates but don't await them — they're bookkeeping and
+    // awaiting 2 IPC roundtrips on every click used to stall rapid
+    // workspace switches behind a queue.
+    if (isDesktopRuntime()) {
+      void workspaceSetSelected(workspaceId).catch(() => undefined);
+      void workspaceSetRuntimeActive(workspaceId).catch(() => undefined);
+    }
+    // Tell the OpenWork server this workspace is now active so it can
+    // emit a config reload event that the OpenCode engine picks up.
+    if (workspaceId) {
+      const target = workspaces.find((item) => item.id === workspaceId) ?? null;
+      const endpoint = endpointForWorkspace(target);
+      if (endpoint) {
+        void endpoint.client.activateWorkspace(endpoint.workspaceId, { persist: true }).catch(() => undefined);
+      }
+    }
+    // If we remember what the user last opened here and that session
+    // still exists in our local list, navigate. Otherwise stay put.
+    const remembered = readLastSessionFor(workspaceId);
+    if (remembered && remembered !== selectedSessionId) {
+      const known = sessionsByWorkspaceId[workspaceId];
+      if (known?.some((session) => session?.id === remembered)) {
+        navigateToWorkspaceSession(workspaceId, remembered);
+      } else {
+        navigateToWorkspaceSession(workspaceId);
+      }
+    } else {
+      navigateToWorkspaceSession(workspaceId);
+    }
+    return true;
+  }, [client, endpointForWorkspace, loadWorkspaceSessionsInBackground, navigateToWorkspaceSession, selectedSessionId, selectedWorkspaceId, sessionsByWorkspaceId, setRetryingWorkspaceIds, workspaces]);
+
+  // 权限模式（WorkBuddy "权限管理" 对标）：hero composer 与 session composer 共享同一状态。
+  const heroPermissionMode = usePermissionModeStore((state) => state.mode);
+  const setHeroPermissionMode = usePermissionModeStore((state) => state.setMode);
+
+  // Opens the create-workspace modal (shared by the sidebar and the composer
+  // workspace selector "New workspace" action).
+  const handleOpenCreateWorkspace = useCallback(() => {
+    if (!canCreateWorkspaces()) return;
+    // Respect the org-level `allowMultipleWorkspaces` restriction (dev
+    // #1505). If the checker returns true, the admin has disabled
+    // adding further workspaces; surface a friendly notice instead of
+    // opening the modal.
+    if (
+      workspaces.length > 0 &&
+      checkDesktopRestriction({ restriction: "allowMultipleWorkspaces" })
+    ) {
+      restrictionNotice.show({
+        title: "Additional workspaces are restricted",
+        message:
+          "Your organization administrator has restricted access to adding additional workspaces.",
+      });
+      return;
+    }
+    setCreateWorkspaceRemoteError(null);
+    setCreateWorkspaceOpen(true);
+  }, [checkDesktopRestriction, restrictionNotice, workspaces.length]);
+
   const newTaskComposerContext = useMemo<NewTaskComposerContext | null>(() => {
     return {
       client,
@@ -1692,13 +1930,36 @@ export function SessionRoute() {
       onOpenSettingsSection: (section: "commands" | "skills" | "mcps" | "plugins" | "extensions") => {
         handleOpenExtensions(section === "skills" ? "skills" : section === "mcps" ? "mcps" : section === "plugins" ? "plugins" : "");
       },
+      onOpenCapabilityManager: handleOpenCapabilityManager,
       taskMode,
       onTaskModeChange: (mode: TaskMode) => setTaskMode(mode),
+      workspaceLabel: selectedWorkspace?.displayName?.trim()
+        || selectedWorkspace?.name?.trim()
+        || selectedWorkspace?.path?.trim()
+        || t("session.workspace_fallback"),
+      workspaceOptions: workspaces.map((workspace) => ({
+        id: workspace.id,
+        label: workspace.displayName?.trim()
+          || workspace.name?.trim()
+          || workspace.path?.trim()
+          || t("session.workspace_fallback"),
+        active: workspace.id === selectedWorkspaceId,
+      })),
+      onWorkspaceSelect: (workspaceId) => {
+        void handleSelectWorkspace(workspaceId);
+      },
+      onOpenCreateWorkspace: handleOpenCreateWorkspace,
+      permissionMode: heroPermissionMode,
+      onPermissionModeChange: setHeroPermissionMode,
     };
   }, [
     client,
     handleOpenExtensions,
     handleOpenSettings,
+    handleSelectWorkspace,
+    handleOpenCreateWorkspace,
+    heroPermissionMode,
+    setHeroPermissionMode,
     listAgents,
     listSlashCommands,
     local,
@@ -1722,28 +1983,8 @@ export function SessionRoute() {
     sessionProviderAuthStore,
     setSelectedAgent,
     taskMode,
+    workspaces,
   ]);
-
-  const handleOpenCreateWorkspace = useCallback(() => {
-    if (!canCreateWorkspaces()) return;
-    // Respect the org-level `allowMultipleWorkspaces` restriction (dev
-    // #1505). If the checker returns true, the admin has disabled
-    // adding further workspaces; surface a friendly notice instead of
-    // opening the modal.
-    if (
-      workspaces.length > 0 &&
-      checkDesktopRestriction({ restriction: "allowMultipleWorkspaces" })
-    ) {
-      restrictionNotice.show({
-        title: "Additional workspaces are restricted",
-        message:
-          "Your organization administrator has restricted access to adding additional workspaces.",
-      });
-      return;
-    }
-    setCreateWorkspaceRemoteError(null);
-    setCreateWorkspaceOpen(true);
-  }, [checkDesktopRestriction, restrictionNotice, workspaces.length]);
 
   const handleOpenRenameWorkspace = useCallback((workspaceId: string) => {
     const workspace = workspaces.find((item) => item.id === workspaceId);
@@ -1921,6 +2162,67 @@ export function SessionRoute() {
       return null;
     }
   }, [endpointForWorkspace, loading, navigateToWorkspaceSession, refreshCloudProviderSync, refreshRouteState, rememberPendingCreatedSession, retryingWorkspaceIds, selectedWorkspaceId, workspaces]);
+
+  /**
+   * 创建带初始 prompt 的新会话：与 sidebar 的"新任务 + 输入"一致。
+   * 灵感页"应用到新会话"也复用此入口。
+   */
+  const handleCreateTaskWithPrompt = useCallback(async (
+    workspaceId: string,
+    prompt: string,
+    attachments?: ComposerAttachment[],
+  ): Promise<void> => {
+    const workspace = workspaces.find((item) => item.id === workspaceId);
+    if (!workspace) return;
+    const endpoint = endpointForWorkspace(workspace);
+    if (!endpoint?.token) return;
+    const workspaceClient = createClient(
+      endpoint.opencodeBaseUrl,
+      workspace.path?.trim() || undefined,
+      { token: endpoint.token, mode: "openwork" },
+    );
+    try {
+      const session = unwrap(
+        await workspaceClient.session.create({ directory: workspace.path?.trim() || undefined }),
+      );
+      if (workspaceId === selectedWorkspaceId) {
+        void refreshCloudProviderSync("new_chat");
+      }
+      const firstTaskPrompt = frameCapabilityPrompt(
+        resolveCapabilityContext(),
+        frameTaskPrompt(taskMode, prompt),
+      );
+      if (hasComposerCapabilities()) {
+        useComposerCapabilityStore.getState().clear();
+      }
+      if (firstTaskPrompt) {
+        const firstTaskAttachments = attachments ?? [];
+        // Attachment chips only survive in-memory (File objects), so the
+        // persisted fallback draft drops their tokens.
+        saveSessionDraft(workspaceId, session.id, { text: firstTaskPrompt.replace(/\[attachment [^\]]+\]/g, "").trim(), mode: "prompt" });
+        // The composer reads its draft from the composer state store,
+        // not the persisted draft store — seed both.
+        useComposerStateStore.getState().setDraft(session.id, firstTaskPrompt);
+        if (firstTaskAttachments.length) {
+          useComposerStateStore.getState().setAttachments(session.id, firstTaskAttachments);
+        }
+        // One-step run: the session surface sends the seeded draft itself.
+        markComposerAutoSend(session.id);
+      }
+      writeActiveWorkspaceId(workspaceId || null);
+      writeLastSessionFor(workspaceId, session.id);
+      rememberPendingCreatedSession(workspaceId, session.id);
+      setSessionsByWorkspaceId((current) => ({
+        ...current,
+        [workspaceId]: [session, ...(current[workspaceId] ?? [])],
+      }));
+      navigateToWorkspaceSession(workspaceId, session.id);
+      focusPromptSoon();
+    } catch {
+      // Fall back to normal task creation without prompt
+      void handleCreateTaskInWorkspace(workspaceId);
+    }
+  }, [endpointForWorkspace, frameTaskPrompt, handleCreateTaskInWorkspace, markComposerAutoSend, navigateToWorkspaceSession, refreshCloudProviderSync, rememberPendingCreatedSession, saveSessionDraft, selectedWorkspaceId, setSessionsByWorkspaceId, taskMode, workspaces]);
 
   // Latest session-list state for prev/next session tab navigation. The
   // `options` field is updated by `onSessionTabsChange` from SessionPage so we
@@ -2523,7 +2825,13 @@ export function SessionRoute() {
         handleOpenCreateWorkspace();
         return;
       }
-      const framed = frameTaskPrompt(taskMode, prompt);
+      const framed = frameCapabilityPrompt(
+        resolveCapabilityContext(),
+        frameTaskPrompt(taskMode, prompt),
+      );
+      if (hasComposerCapabilities()) {
+        useComposerCapabilityStore.getState().clear();
+      }
       await handleCreateWorkspace("starter", folder, { firstTaskPrompt: framed, firstTaskAttachments: attachments ?? [] });
     })();
   }, [handleCreateWorkspace, handleOpenCreateWorkspace, taskMode]);
@@ -2660,6 +2968,10 @@ export function SessionRoute() {
       onOpenExtensions={() => handleOpenExtensions()}
       onOpenProviderAuth={handleOpenProviderAuth}
       onChatFirstTask={handleChatFirstTask}
+      onStartPlan={() => {
+        // Redirect to the dedicated plans page for the full planning lifecycle.
+        navigate("/plans");
+      }}
       chatFirstBusy={createWorkspaceBusy}
       newTaskComposer={newTaskComposerContext}
       providerAuthModal={sessionProviderAuthSnapshot.providerAuthModalOpen ? {
@@ -2704,18 +3016,94 @@ export function SessionRoute() {
           }}
         />
       }
-      primaryTitle={projectsRouteActive ? "Projects" : knowledgeRouteActive ? "Knowledge" : marketplaceRouteActive ? "Marketplace" : skillsRouteActive ? "技能与 Agent 广场" : automationsRouteActive ? "Automations" : undefined}
-      primarySlot={projectsRouteActive ? (
-        <ProjectsPage onClose={() => navigate("/session")} />
-      ) : knowledgeRouteActive ? (
-        <KnowledgePage onClose={() => navigate("/session")} />
-      ) : marketplaceRouteActive ? (
-        <MarketplacePage onClose={() => navigate("/session")} />
-      ) : skillsRouteActive ? (
-        <SkillMarketplacePage onClose={() => navigate("/session")} />
-      ) : automationsRouteActive ? (
-        <AutomationsPage providerCatalog={providerCatalog} />
-      ) : undefined}
+      primaryTitle={
+        plansRouteActive ? t("sidebar.plans")
+          : projectsRouteActive ? t("sidebar.projects")
+          : knowledgeRouteActive ? t("sidebar.knowledge")
+          : marketplaceRouteActive ? t("sidebar.marketplace")
+          : skillsRouteActive ? t("sidebar.skills")
+          : automationsRouteActive ? t("sidebar.automations")
+          : expertsRouteActive ? t("sidebar.experts")
+          : inspirationRouteActive ? t("sidebar.inspiration")
+          : libraryRouteActive ? t("sidebar.library")
+          : connectorsRouteActive ? t("sidebar.connectors")
+          : undefined
+      }
+      primarySlot={hasPrimarySlotRoute ? (
+        <PageErrorBoundary
+          onError={(error, info) => {
+            console.error("[SessionRoute] Page error:", error, info);
+          }}
+        >
+          {plansRouteActive ? (
+            <PlanPage onClose={() => navigate("/session")} />
+          ) : projectsRouteActive ? (
+            <ProjectsPage
+              onClose={() => navigate("/session")}
+              workspaceType={selectedWorkspace?.workspaceType === "remote" ? "remote" : "local"}
+              serverConnected={selectedWorkspace !== undefined}
+              workspaceId={selectedWorkspaceId ?? null}
+              workspaceRoot={selectedWorkspaceRoot}
+              canCreateTask={canCreateTask}
+              client={selectedWorkspaceEndpoint?.client ?? client}
+              getThreadSurface={getProjectThreadSurface}
+              createThread={createProjectThread}
+            />
+          ) : knowledgeRouteActive ? (
+            <KnowledgePage onClose={() => navigate("/session")} />
+          ) : marketplaceRouteActive ? (
+            <MarketplacePage onClose={() => navigate("/session")} workspaceRoot={selectedWorkspaceRoot} client={selectedWorkspaceEndpoint?.client ?? client} onStartTask={(prompt) => {
+              if (selectedWorkspaceId) void handleCreateTaskWithPrompt(selectedWorkspaceId, prompt);
+              else handleChatFirstTask(prompt);
+            }}
+              onManageConnector={(item) => handleOpenSettings(item.kind === "provider" ? "/settings/ai" : "/settings/connectors", selectedWorkspaceId)}
+            />
+          ) : skillsRouteActive ? (
+            <MarketplacePage onClose={() => navigate("/session")} initialTab="skills" workspaceRoot={selectedWorkspaceRoot} client={selectedWorkspaceEndpoint?.client ?? client} onStartTask={(prompt) => {
+              if (selectedWorkspaceId) void handleCreateTaskWithPrompt(selectedWorkspaceId, prompt);
+              else handleChatFirstTask(prompt);
+            }}
+              onManageConnector={(item) => handleOpenSettings(item.kind === "provider" ? "/settings/ai" : "/settings/connectors", selectedWorkspaceId)}
+            />
+          ) : automationsRouteActive ? (
+            <AutomationsPage providerCatalog={providerCatalog} />
+          ) : connectorsRouteActive ? (
+            <MarketplacePage onClose={() => navigate("/session")} initialTab="connectors" workspaceRoot={selectedWorkspaceRoot} client={selectedWorkspaceEndpoint?.client ?? client} onStartTask={(prompt) => {
+              if (selectedWorkspaceId) void handleCreateTaskWithPrompt(selectedWorkspaceId, prompt);
+              else handleChatFirstTask(prompt);
+            }}
+              onManageConnector={(item) => handleOpenSettings(item.kind === "provider" ? "/settings/ai" : "/settings/connectors", selectedWorkspaceId)}
+            />
+          ) : libraryRouteActive ? (
+            <LibraryPage
+              onClose={() => navigate("/session")}
+              client={opencodeClient}
+              workspaceRoot={selectedWorkspaceRoot}
+              onOpenSettings={(route) => handleOpenSettings(route, selectedWorkspaceId)}
+            />
+          ) : expertsRouteActive ? (
+            <MarketplacePage onClose={() => navigate("/session")} initialTab="agents" workspaceRoot={selectedWorkspaceRoot} client={selectedWorkspaceEndpoint?.client ?? client} onStartTask={(prompt) => {
+              if (selectedWorkspaceId) void handleCreateTaskWithPrompt(selectedWorkspaceId, prompt);
+              else handleChatFirstTask(prompt);
+            }}
+              onManageConnector={(item) => handleOpenSettings(item.kind === "provider" ? "/settings/ai" : "/settings/connectors", selectedWorkspaceId)}
+            />
+          ) : inspirationRouteActive ? (
+            <InspirationPage
+              onClose={() => navigate("/session")}
+              onApplyToSession={(prompt) => {
+                if (selectedWorkspaceId) {
+                  void handleCreateTaskWithPrompt(selectedWorkspaceId, prompt);
+                } else {
+                  handleChatFirstTask(prompt);
+                }
+              }}
+            />
+          ) : collabRouteActive ? (
+            <CollabHubPage onClose={() => navigate("/session")} />
+          ) : null}
+        </PageErrorBoundary>
+      ) : null}
       terminalOpen={terminalOpen}
       onTerminalOpenChange={setTerminalOpen}
       onSessionTabsChange={(tabs) => {
@@ -2743,6 +3131,10 @@ export function SessionRoute() {
         onOpenProjects: () => {
           navigate("/projects");
         },
+        plansActive: plansRouteActive,
+        onOpenPlans: () => {
+          navigate("/plans");
+        },
         skillsActive: skillsRouteActive,
         onOpenSkills: () => {
           navigate("/skills");
@@ -2759,49 +3151,7 @@ export function SessionRoute() {
         onOpenCollab: () => {
           navigate("/collab-hub");
         },
-        onSelectWorkspace: async (workspaceId) => {
-          if (workspaceId === selectedWorkspaceId) return true;
-          setLegacySelectedWorkspaceId(workspaceId);
-          writeActiveWorkspaceId(workspaceId || null);
-          const workspace = workspaces.find((item) => item.id === workspaceId);
-          if (client && workspace && !sessionsByWorkspaceId[workspaceId]?.length) {
-            setRetryingWorkspaceIds((current) => Array.from(new Set([...current, workspaceId])));
-            void loadWorkspaceSessionsInBackground([workspace]);
-          }
-          // Fire Tauri updates but don't await them — they're bookkeeping and
-          // awaiting 2 IPC roundtrips on every click used to stall rapid
-          // workspace switches behind a queue.
-          if (isDesktopRuntime()) {
-            void workspaceSetSelected(workspaceId).catch(() => undefined);
-            void workspaceSetRuntimeActive(workspaceId).catch(() => undefined);
-          }
-          // Tell the OpenWork server this workspace is now active so it can
-          // emit a config reload event that the OpenCode engine picks up.
-          // Without this, the permissions from opencode.jsonc are never
-          // applied on the workspace the user is already on at launch. See
-          // issue #870.
-          if (workspaceId) {
-            const workspace = workspaces.find((item) => item.id === workspaceId) ?? null;
-            const endpoint = endpointForWorkspace(workspace);
-            if (endpoint) {
-              void endpoint.client.activateWorkspace(endpoint.workspaceId, { persist: true }).catch(() => undefined);
-            }
-          }
-          // If we remember what the user last opened here and that session
-          // still exists in our local list, navigate. Otherwise stay put.
-          const remembered = readLastSessionFor(workspaceId);
-          if (remembered && remembered !== selectedSessionId) {
-            const known = sessionsByWorkspaceId[workspaceId];
-            if (known?.some((session) => session?.id === remembered)) {
-              navigateToWorkspaceSession(workspaceId, remembered);
-            } else {
-              navigateToWorkspaceSession(workspaceId);
-            }
-          } else {
-            navigateToWorkspaceSession(workspaceId);
-          }
-          return true;
-        },
+        onSelectWorkspace: handleSelectWorkspace,
         onOpenSession: (workspaceId, sessionId) => {
           setLegacySelectedWorkspaceId(workspaceId);
           writeActiveWorkspaceId(workspaceId || null);
@@ -2817,52 +3167,7 @@ export function SessionRoute() {
           });
         },
         onCreateTaskWithPrompt: (workspaceId, prompt, attachments) => {
-          void (async () => {
-            const workspace = workspaces.find((item) => item.id === workspaceId);
-            if (!workspace) return;
-            const endpoint = endpointForWorkspace(workspace);
-            if (!endpoint?.token) return;
-            const workspaceClient = createClient(
-              endpoint.opencodeBaseUrl,
-              workspace.path?.trim() || undefined,
-              { token: endpoint.token, mode: "openwork" },
-            );
-            try {
-              const session = unwrap(
-                await workspaceClient.session.create({ directory: workspace.path?.trim() || undefined }),
-              );
-              if (workspaceId === selectedWorkspaceId) {
-                void refreshCloudProviderSync("new_chat");
-              }
-              const firstTaskPrompt = frameTaskPrompt(taskMode, prompt);
-              if (firstTaskPrompt) {
-                const firstTaskAttachments = attachments ?? [];
-                // Attachment chips only survive in-memory (File objects), so the
-                // persisted fallback draft drops their tokens.
-                saveSessionDraft(workspaceId, session.id, { text: firstTaskPrompt.replace(/\[attachment [^\]]+\]/g, "").trim(), mode: "prompt" });
-                // The composer reads its draft from the composer state store,
-                // not the persisted draft store — seed both.
-                useComposerStateStore.getState().setDraft(session.id, firstTaskPrompt);
-                if (firstTaskAttachments.length) {
-                  useComposerStateStore.getState().setAttachments(session.id, firstTaskAttachments);
-                }
-                // One-step run: the session surface sends the seeded draft itself.
-                markComposerAutoSend(session.id);
-              }
-              writeActiveWorkspaceId(workspaceId || null);
-              writeLastSessionFor(workspaceId, session.id);
-              rememberPendingCreatedSession(workspaceId, session.id);
-              setSessionsByWorkspaceId((current) => ({
-                ...current,
-                [workspaceId]: [session, ...(current[workspaceId] ?? [])],
-              }));
-              navigateToWorkspaceSession(workspaceId, session.id);
-              focusPromptSoon();
-            } catch {
-              // Fall back to normal task creation without prompt
-              void handleCreateTaskInWorkspace(workspaceId);
-            }
-          })();
+          void handleCreateTaskWithPrompt(workspaceId, prompt, attachments);
         },
         onOpenRenameWorkspace: handleOpenRenameWorkspace,
         onShareWorkspace: handleShareWorkspace,

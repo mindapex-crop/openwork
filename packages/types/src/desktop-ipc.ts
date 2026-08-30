@@ -232,6 +232,84 @@ export type ExecResult = {
   stderr: string;
 };
 
+// ---------------------------------------------------------------------------
+// Git integration (@Git mentions)
+// ---------------------------------------------------------------------------
+
+export type GitChangeStatus = "modified" | "added" | "deleted" | "renamed" | "untracked";
+
+export type GitChange = {
+  path: string;
+  status: GitChangeStatus;
+  staged: boolean;
+};
+
+export type GitStatusResult = {
+  branch: string;
+  ahead: number;
+  behind: number;
+  changes: GitChange[];
+};
+
+export type GitDiffResult = {
+  diff: string;
+  fileCount: number;
+  additions: number;
+  deletions: number;
+};
+
+export type GitCommit = {
+  hash: string;
+  message: string;
+  author: string;
+  date: string;
+  shortHash: string;
+};
+
+export type GitLogResult = {
+  commits: GitCommit[];
+};
+
+// ---------------------------------------------------------------------------
+// Terminal history (@Terminal mentions)
+// ---------------------------------------------------------------------------
+
+export type TerminalHistoryEntry = {
+  /** 1-based index shown to the user. */
+  index: number;
+  command: string;
+  outputPreview: string;
+  timestamp: string;
+  exitCode?: number;
+};
+
+// ---------------------------------------------------------------------------
+// Code symbols (@Code mentions)
+// ---------------------------------------------------------------------------
+
+export type CodeSymbol = {
+  name: string;
+  kind: "function" | "class" | "const" | "export";
+  line: number;
+};
+
+export type CodeSymbolResult = {
+  /** Absolute file path. */
+  filePath: string;
+  symbols: CodeSymbol[];
+};
+
+// ---------------------------------------------------------------------------
+// Workspace rules (@Rules mentions)
+// ---------------------------------------------------------------------------
+
+export type WorkspaceRule = {
+  name: string;
+  description: string;
+  ruleType: "always" | "requested" | "manual";
+  filePath: string;
+};
+
 export type LocalSkillCard = {
   name: string;
   path: string;
@@ -542,6 +620,23 @@ export type DesktopCommandMap = {
   __setZoomFactor: { args: [factor: number]; result: boolean };
   __setNativeTheme: { args: [theme: string]; result: unknown };
   __setApplicationMenuVisible: { args: [visible: boolean]; result: unknown };
+
+  // Git integration (@Git mentions)
+  gitStatus: { args: [cwd: string]; result: GitStatusResult };
+  gitDiff: {
+    args: [cwd: string, options?: { staged?: boolean; file?: string }];
+    result: GitDiffResult;
+  };
+  gitLog: { args: [cwd: string, options?: { limit?: number }]; result: GitLogResult };
+
+  // Terminal history (@Terminal mentions)
+  listTerminalHistory: { args: [limit?: number]; result: TerminalHistoryEntry[] };
+
+  // Code symbols (@Code mentions)
+  listCodeSymbols: { args: [cwd: string, filePaths: string[]]; result: CodeSymbolResult[] };
+
+  // Workspace rules (@Rules mentions)
+  listWorkspaceRules: { args: [cwd: string]; result: WorkspaceRule[] };
 };
 
 export type DesktopCommandName = keyof DesktopCommandMap;

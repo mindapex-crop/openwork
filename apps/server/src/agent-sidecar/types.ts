@@ -162,6 +162,8 @@ export interface AgentSidecarConfig {
   agentId: string;
   /** 协议 */
   protocol: SidecarProtocol;
+  /** 系统提示词（可选，注入到 agent 会话上下文，专家/智能体场景使用） */
+  systemPrompt?: string;
   /** 二进制名（PATH 上的可执行名） */
   binary?: string;
   /** 二进制绝对路径（覆盖 PATH 查找） */

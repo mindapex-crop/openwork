@@ -7,6 +7,7 @@ import {
   settingsPathForRoute,
 } from "../src/react-app/shell/settings-route";
 import {
+  getGlobalSettingsTabs,
   getSettingsTabLabel,
   getWorkspaceSettingsTabs,
   isSettingsTabActive,
@@ -96,11 +97,35 @@ describe("settings route parsing", () => {
       extensionDetailId: "skill:briefing",
     });
   });
+
+  test("keeps every tab with a real panel on its own route", () => {
+    expect(parseSettingsPath("/settings/connectors")).toEqual({ tab: "connectors", redirectPath: null });
+    expect(parseSettingsPath("/settings/im-connectors")).toEqual({ tab: "im-connectors", redirectPath: null });
+    expect(parseSettingsPath("/settings/usage")).toEqual({ tab: "usage", redirectPath: null });
+  });
+
+  test("does not advertise tabs that have no panel", () => {
+    // notifications / about 没有面板：路由兜底回 General，所以侧栏也不该列出。
+    expect(parseSettingsPath("/settings/notifications")).toEqual({ tab: "general", redirectPath: "general" });
+    expect(parseSettingsPath("/settings/about")).toEqual({ tab: "general", redirectPath: "general" });
+    const offered = [
+      ...getWorkspaceSettingsTabs(),
+      ...getGlobalSettingsTabs(true, { autoUpdate: true, localRuntimeControl: true }),
+    ];
+    expect(offered).not.toContain("notifications");
+    expect(offered).not.toContain("about");
+  });
 });
 
 describe("settings navigation", () => {
   test("includes Library in workspace settings", () => {
-    expect(getWorkspaceSettingsTabs()).toEqual(["preferences", "permissions", "extensions", "advanced"]);
+    expect(getWorkspaceSettingsTabs()).toEqual(["connectors", "skills", "preferences", "permissions", "extensions", "advanced"]);
     expect(getSettingsTabLabel("extensions")).toBe("Library");
+  });
+
+  test("Connectors tab is first in workspace settings and uses the Connectors label", () => {
+    const tabs = getWorkspaceSettingsTabs();
+    expect(tabs[0]).toBe("connectors");
+    expect(getSettingsTabLabel("connectors")).toBe("Connectors");
   });
 });

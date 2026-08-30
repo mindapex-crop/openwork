@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   ChevronDown,
@@ -35,93 +35,21 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-type TeamStrategyId = "conservative" | "balanced" | "aggressive";
-type HarnessKind = "local" | "ssh" | "cloud" | "container";
-type MemberRole = "primary" | "specialist" | "reviewer" | "fallback" | "observer";
-
-type TeamSummary = {
-  id: string;
-  name: string;
-  strategy: TeamStrategyId;
-  memberCount: number;
-  harnessId: string;
-  status: "idle" | "running" | "completed" | "failed";
-  createdAt: number;
-  updatedAt: number;
-};
-
-type TeamDetail = TeamSummary & {
-  memberSpecs: Array<{ agentId: string; role?: string }>;
-  lastTaskResult?: {
-    taskId: string;
-    subtasks: Array<{ subtaskId: string; agentId: string; prompt: string; status: string }>;
-    completedAt: number;
-  };
-};
-
-type StrategyInfo = {
-  id: TeamStrategyId;
-  name: string;
-  description: string;
-  complexity: "low" | "medium" | "high";
-  costLevel: "low" | "medium" | "high";
-  qualityLevel: "low" | "medium" | "high";
-  maxSubtasks: number;
-  enableReviewLoop: boolean;
-};
-
-type HarnessInfo = {
-  id: string;
-  kind: HarnessKind;
-  name: string;
-  description: string;
-  capabilities: {
-    pty: boolean;
-    acp: boolean;
-    http: boolean;
-    mcp: boolean;
-    gpu: boolean;
-    docker: boolean;
-    maxConcurrentAgents: number;
-  };
-  rootPath?: string;
-  health?: {
-    status: "healthy" | "degraded" | "unreachable";
-    latencyMs: number;
-    lastCheckedAt: number;
-    message?: string;
-  };
-};
-
-type DecompositionResult = {
-  taskId: string;
-  complexity: "low" | "medium" | "high";
-  strategy: TeamStrategyId;
-  strategyMeta: StrategyInfo;
-  suggestedApproach: string;
-  subtasks: Array<{
-    subtaskId: string;
-    agentId: string;
-    prompt: string;
-    dependencies: string[];
-  }>;
-  estimatedCost: { low: number; high: number };
-};
-
-type TeamRunResult = {
-  taskId: string;
-  strategy: TeamStrategyId;
-  complexity: "low" | "medium" | "high";
-  subtasks: Array<{
-    subtaskId: string;
-    agentId: string;
-    prompt: string;
-    dependencies: string[];
-  }>;
-  status: "planned" | "running" | "completed" | "failed";
-  message: string;
-  harnessId: string;
-};
+import { useExpertsStore } from "../../experts/experts-store";
+import type { Expert } from "../../experts/types";
+import {
+  type DecompositionResult,
+  type HarnessInfo,
+  type HarnessKind,
+  type MemberRole,
+  type StrategyInfo,
+  type TaskSnapshot,
+  type TeamDetail,
+  type TeamRunResult,
+  type TeamStrategyId,
+  type TeamSummary,
+  teamApiRequest,
+} from "./team-api";
 
 type TeamPanelProps = {
   onClose: () => void;
@@ -135,6 +63,9 @@ type CreateTeamState = {
 };
 
 const ROLE_OPTIONS: MemberRole[] = ["primary", "specialist", "reviewer", "fallback", "observer"];
+
+/** 执行期间子任务进度的轮询间隔：run 响应要等整个 fan-out 结束，进度靠落盘快照轮询 */
+const TASK_POLL_INTERVAL_MS = 1_500;
 
 const ROLE_LABELS: Record<MemberRole, string> = {
   primary: "Primary",
@@ -156,20 +87,6 @@ const HARNESS_ICONS: Record<HarnessKind, typeof Server> = {
   cloud: Cloud,
   container: Cpu,
 };
-
-// ---------- API helpers ----------
-
-async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    ...options,
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error ?? `Request failed: ${response.status}`);
-  }
-  return response.json() as Promise<T>;
-}
 
 function getStatusColor(status: string) {
   switch (status) {
@@ -200,22 +117,39 @@ export function TeamPanel(props: TeamPanelProps) {
   const [decomposing, setDecomposing] = useState(false);
   const [decompositionResult, setDecompositionResult] = useState<DecompositionResult | null>(null);
   const [taskPrompt, setTaskPrompt] = useState("");
-  const [running, setRunning] = useState(false);
+  const [runningTeamId, setRunningTeamId] = useState<string | null>(null);
   const [runResult, setRunResult] = useState<TeamRunResult | null>(null);
+  const [liveTask, setLiveTask] = useState<TaskSnapshot | null>(null);
+  const isRunning = runningTeamId !== null;
+  const executionCardRef = useRef<HTMLDivElement>(null);
+
+  // 本地专家列表：成员编辑可复用专家选择；后端未就绪时静默失败，回退自由输入。
+  const experts = useExpertsStore((state) => state.experts);
+
+  useEffect(() => {
+    void useExpertsStore.getState().fetchExperts().catch(() => {});
+  }, []);
 
   const selectedTeam = useMemo(
     () => teams.find((t) => t.id === selectedTeamId) ?? null,
     [selectedTeamId, teams],
   );
 
+  // 执行卡的数据源：运行中用轮询到的快照，否则回落到团队持久化的上一次任务结果。
+  const taskView = liveTask ?? teamDetail?.lastTaskResult ?? null;
+  const subtaskRows = taskView?.subtasks ?? [];
+  const finishedSubtasks = subtaskRows.filter(
+    (row) => row.status === "completed" || row.status === "failed",
+  ).length;
+
   const loadData = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
       const [teamsData, strategiesData, harnessesData] = await Promise.all([
-        apiRequest<{ teams: TeamSummary[] }>("/teams"),
-        apiRequest<{ strategies: StrategyInfo[] }>("/team-strategies"),
-        apiRequest<{ harnesses: HarnessInfo[] }>("/team-harnesses"),
+        teamApiRequest<{ teams: TeamSummary[] }>("/teams"),
+        teamApiRequest<{ strategies: StrategyInfo[] }>("/team-strategies"),
+        teamApiRequest<{ harnesses: HarnessInfo[] }>("/team-harnesses"),
       ]);
       setTeams(teamsData.teams);
       setStrategies(strategiesData.strategies);
@@ -229,7 +163,7 @@ export function TeamPanel(props: TeamPanelProps) {
 
   const loadTeamDetail = useCallback(async (teamId: string) => {
     try {
-      const data = await apiRequest<{ team: TeamDetail }>(`/teams/${teamId}`);
+      const data = await teamApiRequest<{ team: TeamDetail }>(`/teams/${teamId}`);
       setTeamDetail(data.team);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -241,6 +175,8 @@ export function TeamPanel(props: TeamPanelProps) {
   }, [loadData]);
 
   useEffect(() => {
+    setLiveTask(null);
+    setRunResult(null);
     if (selectedTeamId) {
       void loadTeamDetail(selectedTeamId);
     } else {
@@ -248,9 +184,35 @@ export function TeamPanel(props: TeamPanelProps) {
     }
   }, [selectedTeamId, loadTeamDetail]);
 
+  // 执行期间轮询落盘快照：POST /run 要等整个 fan-out 结束才返回，进度只能这样看到。
+  useEffect(() => {
+    if (!runningTeamId) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const data = await teamApiRequest<{ tasks: TaskSnapshot[] }>(`/teams/${runningTeamId}/tasks`);
+        if (!cancelled) setLiveTask(data.tasks[0] ?? null);
+      } catch {
+        // 单次轮询失败忽略：终态由 run 响应写入
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), TASK_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [runningTeamId]);
+
+  // 运行一开始就把执行卡滚进可视区：它渲染在任务框下方，不滚的话用户看不到进度。
+  useEffect(() => {
+    if (!runningTeamId) return;
+    executionCardRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [runningTeamId]);
+
   const handleCreateTeam = useCallback(async (state: CreateTeamState) => {
     try {
-      const data = await apiRequest<{ team: TeamDetail }>("/teams", {
+      const data = await teamApiRequest<{ team: TeamDetail }>("/teams", {
         method: "POST",
         body: JSON.stringify({
           name: state.name,
@@ -282,7 +244,7 @@ export function TeamPanel(props: TeamPanelProps) {
     setDecompositionResult(null);
     setError(null);
     try {
-      const data = await apiRequest<{ decomposition: DecompositionResult }>(
+      const data = await teamApiRequest<{ decomposition: DecompositionResult }>(
         `/teams/${selectedTeamId}/decompose`,
         {
           method: "POST",
@@ -299,32 +261,29 @@ export function TeamPanel(props: TeamPanelProps) {
 
   const handleRunTask = useCallback(async () => {
     if (!selectedTeamId || !taskPrompt.trim()) return;
-    setRunning(true);
+    setRunningTeamId(selectedTeamId);
     setRunResult(null);
+    setLiveTask(null);
     setError(null);
     try {
-      const data = await apiRequest<{ task: TeamRunResult }>(
-        `/teams/${selectedTeamId}/run`,
-        {
-          method: "POST",
-          body: JSON.stringify({ taskPrompt }),
-        },
-      );
-      setRunResult(data.task);
-      setSelectedTeamId((current) => {
-        if (current) void loadTeamDetail(current);
-        return current;
+      const result = await teamApiRequest<TeamRunResult>(`/teams/${selectedTeamId}/run`, {
+        method: "POST",
+        body: JSON.stringify({ taskPrompt }),
       });
+      setRunResult(result);
+      setLiveTask({ taskId: result.taskId, subtasks: result.subtaskResults, completedAt: Date.now() });
+      void loadData();
+      void loadTeamDetail(selectedTeamId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setRunning(false);
+      setRunningTeamId(null);
     }
-  }, [selectedTeamId, taskPrompt, loadTeamDetail]);
+  }, [selectedTeamId, taskPrompt, loadData, loadTeamDetail]);
 
   const handleDeleteTeam = useCallback(async (teamId: string) => {
     try {
-      await apiRequest(`/teams/${teamId}`, { method: "DELETE" });
+      await teamApiRequest(`/teams/${teamId}`, { method: "DELETE" });
       setTeams((prev) => prev.filter((t) => t.id !== teamId));
       if (selectedTeamId === teamId) {
         setSelectedTeamId(null);
@@ -379,6 +338,7 @@ export function TeamPanel(props: TeamPanelProps) {
                   <CreateTeamDialog
                     strategies={strategies}
                     harnesses={harnesses}
+                    experts={experts}
                     onSubmit={handleCreateTeam}
                     onCancel={() => setShowCreateDialog(false)}
                   />
@@ -532,10 +492,10 @@ export function TeamPanel(props: TeamPanelProps) {
                         <Button
                           size="sm"
                           onClick={() => void handleRunTask()}
-                          disabled={!taskPrompt.trim() || running}
+                          disabled={!taskPrompt.trim() || isRunning}
                         >
                           <Play size={14} className="mr-1" />
-                          {running ? "Running..." : "Run Team Task"}
+                          {isRunning ? "Running..." : "Run Team Task"}
                         </Button>
                       </div>
                     </div>
@@ -555,11 +515,22 @@ export function TeamPanel(props: TeamPanelProps) {
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-2">
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span>Estimated cost: ${decompositionResult.estimatedCost.low} - ${decompositionResult.estimatedCost.high}</span>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <span>
+                          {decompositionResult.subtasks.length} subtasks across {teamDetail.memberSpecs.length} members
+                        </span>
+                        <span>&middot;</span>
+                        <span>
+                          cost: {decompositionResult.strategyMeta.costLevel} &middot; quality:{" "}
+                          {decompositionResult.strategyMeta.qualityLevel}
+                        </span>
                         <span>&middot;</span>
                         <span>Approach: {decompositionResult.suggestedApproach}</span>
                       </div>
+                      <p className="text-[10px] text-muted-foreground">
+                        Fan-out multiplies token use — one measured 5-subtask run cost about 5.6× a single-agent
+                        run. Indicative only, not a quote for this task.
+                      </p>
                       <div className="space-y-1">
                         {decompositionResult.subtasks.map((st, i) => (
                           <div
@@ -585,40 +556,68 @@ export function TeamPanel(props: TeamPanelProps) {
                   </Card>
                 ) : null}
 
-                {/* Run Result */}
-                {runResult ? (
-                  <Card variant="outline" size="sm" className="border-emerald-200">
+                {/* 子任务实时流：运行中轮询服务端落盘快照，结束后由 run 响应补全终态 */}
+                {isRunning || taskView ? (
+                  <Card
+                    ref={executionCardRef}
+                    variant="outline"
+                    size="sm"
+                    className={isRunning ? "border-sky-500/30" : "border-emerald-200"}
+                  >
                     <CardHeader className="pb-2">
-                      <CardTitle className="text-sm flex items-center gap-2">
-                        <Rocket size={14} className="text-emerald-500" />
-                        Task Execution Plan
-                      </CardTitle>
-                      <CardDescription>{runResult.message}</CardDescription>
+                      <div className="flex items-center justify-between gap-2">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                          <Rocket size={14} className="text-emerald-500" />
+                          Subtask Execution
+                        </CardTitle>
+                        <span className="text-xs text-muted-foreground">
+                          {finishedSubtasks}/{subtaskRows.length} finished
+                        </span>
+                      </div>
+                      <CardDescription>
+                        {runResult?.message ??
+                          (isRunning
+                            ? liveTask
+                              ? `Progress refreshes every ${TASK_POLL_INTERVAL_MS / 1000}s.`
+                              : "Waiting for the first progress snapshot…"
+                            : "")}
+                      </CardDescription>
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-1">
-                        {runResult.subtasks.map((st, i) => (
-                          <div
-                            key={st.subtaskId}
-                            className="flex items-start gap-2 rounded-md border border-border px-3 py-2"
-                          >
-                            <span className="mt-0.5 text-xs font-medium">{i + 1}.</span>
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <Badge variant="secondary" className="text-[10px]">
-                                  <Bot size={10} className="mr-1" />
-                                  {st.agentId}
-                                </Badge>
-                                {st.dependencies.length > 0 ? (
-                                  <span className="text-[10px] text-muted-foreground">
-                                    needs: {st.dependencies.join(", ")}
-                                  </span>
+                        {subtaskRows.map((st, i) => {
+                          const role = teamDetail?.memberSpecs.find((m) => m.agentId === st.agentId)?.role;
+                          return (
+                            <div
+                              key={st.subtaskId}
+                              className="flex items-start gap-2 rounded-md border border-border px-3 py-2"
+                            >
+                              <span className="mt-0.5 text-xs font-medium">{i + 1}.</span>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge variant="secondary" className="text-[10px]">
+                                    <Bot size={10} className="mr-1" />
+                                    {st.agentId}
+                                  </Badge>
+                                  {role ? (
+                                    <Badge variant="outline" className="text-[10px]">
+                                      {role}
+                                    </Badge>
+                                  ) : null}
+                                  <Badge variant="outline" className={cn("text-[10px]", getStatusColor(st.status))}>
+                                    {st.status}
+                                  </Badge>
+                                </div>
+                                <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{st.prompt}</p>
+                                {st.outputTail ? (
+                                  <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded bg-muted px-2 py-1 text-[10px] text-muted-foreground">
+                                    {st.outputTail}
+                                  </pre>
                                 ) : null}
                               </div>
-                              <p className="mt-1 text-xs text-muted-foreground">{st.prompt}</p>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </CardContent>
                   </Card>
@@ -681,6 +680,8 @@ export function TeamPanel(props: TeamPanelProps) {
 type CreateTeamDialogProps = {
   strategies: StrategyInfo[];
   harnesses: HarnessInfo[];
+  /** 可复用的本地专家列表（为空时回退自由输入 Agent ID）。 */
+  experts: readonly Expert[];
   onSubmit: (state: CreateTeamState) => Promise<void>;
   onCancel: () => void;
 };
@@ -819,12 +820,30 @@ function CreateTeamDialog(props: CreateTeamDialogProps) {
           <div className="space-y-2">
             {members.map((member, i) => (
               <div key={i} className="flex items-center gap-2">
-                <Input
-                  placeholder="Agent ID (e.g., opencode, kimi, deepscode)"
-                  value={member.agentId}
-                  onChange={(e) => updateMember(i, "agentId", e.target.value)}
-                  className="flex-1"
-                />
+                {props.experts.length > 0 ? (
+                  <Select
+                    value={member.agentId}
+                    onValueChange={(v: string | null) => updateMember(i, "agentId", v ?? "")}
+                  >
+                    <SelectTrigger className="flex-1">
+                      <SelectValue placeholder="Select expert" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {props.experts.map((expert) => (
+                        <SelectItem key={expert.id} value={expert.id}>
+                          {expert.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    placeholder="Agent ID (e.g., opencode, kimi, deepscode)"
+                    value={member.agentId}
+                    onChange={(e) => updateMember(i, "agentId", e.target.value)}
+                    className="flex-1"
+                  />
+                )}
                 <Select value={member.role} onValueChange={(v: string | null) => updateMember(i, "role", v ?? "")}>
                   <SelectTrigger className="w-28">
                     <SelectValue />

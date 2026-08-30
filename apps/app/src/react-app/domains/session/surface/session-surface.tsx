@@ -3,11 +3,12 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } fro
 import type { UIMessage } from "ai";
 import { useQuery } from "@tanstack/react-query";
 import type { SessionStatus } from "@opencode-ai/sdk/v2/client";
-import { Check, Minimize2 } from "lucide-react";
+import { Check, Minimize2, Volume2, Square } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 
 import { captureAnalyticsEvent } from "@/app/lib/analytics";
 import { createClient, unwrap } from "@/app/lib/opencode";
+import { useTextToSpeech } from "../voice/use-text-to-speech";
 import { abortSessionSafe } from "@/app/lib/opencode-session";
 import { t } from "@/i18n";
 import { readWorkspaceCloudImports, type CloudImportedPlugin } from "@/app/cloud/import-state";
@@ -39,11 +40,17 @@ import type {
   CloudMcpSubmissionGateState,
   CloudMcpSubmissionResult,
 } from "@/react-app/domains/connections/cloud-mcp-submit-readiness";
-import { ReactSessionComposer } from "./composer/composer";
+import { ReactSessionComposer, type CapabilityManagerKind } from "./composer/composer";
+import { useScreenRecording } from "@/react-app/domains/capture";
+import type { TaskMode } from "../chat/task-mode";
 import { useSessionModelSelection } from "./session-model-store";
 import type { ProviderCatalog } from "./use-model-behavior";
 import { decodeComposerMentionValue, encodeComposerMentionValue, type ComposerMentionKind } from "./composer/mention-encoding";
 import { desktopBridge, openDesktopUrl } from "@/app/lib/desktop";
+import { isDesktopRuntime } from "@/app/lib/runtime-env";
+import type { GitChange as MentionGitChange, GitCommit as MentionGitCommit } from "./composer/git-mentions";
+import type { TerminalHistoryEntry as MentionTerminalHistoryEntry } from "./composer/terminal-mentions";
+import type { RuleDefinition as MentionRuleDefinition } from "./composer/rules-mentions";
 import { parseSlashCommandInvocation } from "./composer/slash-command";
 import { connectSkillPrompt, parseConnectSkillToken } from "./composer/connect-skill-token";
 import { createPastedTextChip, resolvePastedTextPlaceholders } from "./composer/pasted-text";
@@ -64,8 +71,9 @@ import { getSessionActivityStatusLabel, useSessionActivityStore, type SessionAct
 import { PermissionApprovalPanel } from "@/react-app/domains/session/chat/permission-approval-modal";
 import { QuestionPanel } from "@/react-app/domains/session/modals/question-modal";
 import { QueuedMessagesPanel } from "@/react-app/domains/session/modals/queued-messages-panel";
-import { deriveOpenTargets, selectAutoOpenTarget, type OpenTarget } from "@/react-app/domains/session/artifacts/open-target";
+import { deriveFileChanges, deriveOpenTargets, selectAutoOpenTarget, type OpenTarget } from "@/react-app/domains/session/artifacts/open-target";
 import { usePanelTabStore } from "@/react-app/domains/session/panel/panel-tab-store";
+import { useConversationPresenceStore } from "@/react-app/domains/session/chat/conversation-presence-store";
 import {
   markSessionSnapshotFetchStart,
   seedSessionState,
@@ -111,6 +119,9 @@ import {
 } from "@/react-app/domains/connections/cloud-inventory-cache";
 import { EMPTY_CONNECT_CAPABILITY_INVENTORY } from "@/react-app/domains/session/surface/connect-capability-inventory";
 import { consumeComposerAutoSend } from "./composer-auto-send";
+import { buildMentionGroups, flattenMentionGroups, type MentionProviderData } from "./composer/mention-provider";
+import { useKnowledgeStore } from "@/react-app/domains/knowledge/knowledge-store";
+import type { MentionItem } from "./composer/composer";
 
 const EMPTY_TRANSCRIPT: UIMessage[] = [];
 const IDLE_STATUS: SessionStatus = { type: "idle" };
@@ -328,6 +339,17 @@ export type SessionSurfaceProps = {
   modelVariant: string | null;
   modelBehaviorOptions?: { value: string | null; label: string }[];
   onModelVariantChange: (value: string | null) => void;
+  /** Ask / Plan / Craft 任务模式（WorkBuddy 输入区对标）。 */
+  taskMode?: TaskMode;
+  onTaskModeChange?: (mode: TaskMode) => void;
+  /** 当前工作空间 + 切换（WorkBuddy "设置工作空间" 对标）。 */
+  workspaceLabel?: string;
+  workspaceOptions?: { id: string; label: string; active: boolean }[];
+  onWorkspaceSelect?: (workspaceId: string) => void;
+  onOpenCreateWorkspace?: () => void;
+  /** 权限模式（WorkBuddy "权限管理：默认权限 / 完全访问" 对标）。 */
+  permissionMode?: "manual" | "full";
+  onPermissionModeChange?: (mode: "manual" | "full") => void;
   agentLabel: string;
   selectedAgent: string | null;
   /** True when selectedAgent is an injected CLI agent (source === "openwork"). */
@@ -353,6 +375,8 @@ export type SessionSurfaceProps = {
   onUploadInboxFiles?: ((files: File[], options?: { notify?: boolean }) => void | Promise<unknown>) | null;
   providerConnectedCount?: number;
   onOpenSettingsSection?: ((section: "commands" | "skills" | "mcps" | "plugins" | "extensions" | "providers") => void) | undefined;
+  /** 跳转到智能体 / 连接器的管理页（WorkBuddy「管理连接器」对标）。 */
+  onOpenCapabilityManager?: ((kind: CapabilityManagerKind) => void) | undefined;
   onRevertToMessage?: (messageId: string, sessionId: string) => Promise<boolean>;
   onRestoreRevertedSession?: (sessionId: string) => Promise<boolean>;
   onForkAtMessage?: (messageId: string | null, sessionId: string) => void;
@@ -902,6 +926,97 @@ export function SessionSurface(props: SessionSurfaceProps) {
     currentSnapshot,
     cachedRendered: rendered,
   });
+
+  // Enhanced @ mention provider: aggregate docs, git, terminal, rules sources.
+  const knowledgeItems = useKnowledgeStore((state) => state.items);
+
+  // Real data sources from the Electron main process (git, terminal, rules).
+  // In non-Electron (web) these stay empty and the mention menu shows only
+  // file + docs sources.
+  const [mentionGitChanges, setMentionGitChanges] = useState<MentionGitChange[]>([]);
+  const [mentionGitCommits, setMentionGitCommits] = useState<MentionGitCommit[]>([]);
+  const [mentionTerminalHistory, setMentionTerminalHistory] = useState<MentionTerminalHistoryEntry[]>([]);
+  const [mentionRules, setMentionRules] = useState<MentionRuleDefinition[]>([]);
+
+  // Fetch git status, terminal history, and workspace rules from the desktop
+  // bridge whenever the workspace root changes.
+  useEffect(() => {
+    if (!isDesktopRuntime() || !props.workspaceRoot.trim()) return;
+    const cwd = props.workspaceRoot.trim();
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const status = await desktopBridge.gitStatus(cwd);
+        if (cancelled) return;
+        setMentionGitChanges(
+          status.changes.map((c) => ({
+            filePath: c.path,
+            changeType: c.status === "untracked" ? "modified" : (c.status as MentionGitChange["changeType"]),
+          })),
+        );
+      } catch {
+        // Git not installed or not a repo — leave changes empty.
+      }
+
+      try {
+        const log = await desktopBridge.gitLog(cwd, { limit: 10 });
+        if (cancelled) return;
+        setMentionGitCommits(
+          log.commits.map((c) => ({
+            sha: c.hash,
+            message: c.message,
+            author: c.author,
+            timestamp: c.date,
+          })),
+        );
+      } catch {
+        // Ignore — leave commits empty.
+      }
+
+      try {
+        const rules = await desktopBridge.listWorkspaceRules(cwd);
+        if (cancelled) return;
+        setMentionRules(rules);
+      } catch {
+        // Ignore — leave rules empty.
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [props.workspaceRoot]);
+
+  // Terminal history is global (not workspace-scoped); poll it on mount and
+  // when the workspace changes so newly-run commands appear.
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const history = await desktopBridge.listTerminalHistory(10);
+        if (!cancelled) setMentionTerminalHistory(history);
+      } catch {
+        // Ignore — leave history empty.
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [props.workspaceRoot]);
+
+  const mentionProviderData: MentionProviderData = {
+    recentFiles: props.recentFiles,
+    knowledgeItems,
+    gitChanges: mentionGitChanges,
+    gitCommits: mentionGitCommits,
+    terminalHistory: mentionTerminalHistory,
+    rules: mentionRules,
+  };
+  const extraMentionItems: MentionItem[] = useMemo(
+    () => flattenMentionGroups(buildMentionGroups(mentionProviderData)),
+    [mentionProviderData],
+  );
+
   const revertMessageId = snapshot?.session.revert?.messageID ?? null;
   const revertedMessageCount = snapshot && revertMessageId ? hiddenMessageCount(snapshot, revertMessageId) : 0;
   const liveStatus = statusState ?? snapshot?.status ?? IDLE_STATUS;
@@ -941,6 +1056,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
 
     return [...baseRenderedMessages, ...evalMarkdownMessages];
   }, [baseRenderedMessages, evalMarkdownMessages]);
+  // WorkBuddy 对标：向 shell 上报"会话是否已有对话"，供右侧结果区（产物/工作空间文件/变更）
+  // 在无对话时禁用展开。eval 注入的确定性消息也计入（DEV 校验用）。
+  const hasRenderedMessages = renderedMessages.length > 0;
+  useEffect(() => {
+    useConversationPresenceStore.getState().setPresence(props.sessionId, hasRenderedMessages);
+  }, [hasRenderedMessages, props.sessionId]);
   const seedMarkdownPrimitiveControlAction = useMemo<OpenworkControlAction | null>(() => {
     if (!import.meta.env.DEV) return null;
 
@@ -1081,6 +1202,12 @@ export function SessionSurface(props: SessionSurfaceProps) {
     usePanelTabStore.getState().syncTranscriptArtifacts(props.sessionId, verifiedOpenTargets);
   }, [props.sessionId, verifiedOpenTargets]);
 
+  const fileChanges = useMemo(() => deriveFileChanges(renderedMessages), [renderedMessages]);
+
+  useEffect(() => {
+    usePanelTabStore.getState().syncTranscriptChanges(props.sessionId, fileChanges);
+  }, [fileChanges, props.sessionId]);
+
   useEffect(() => {
     if (!pendingSessionLoad) {
       setShowDelayedLoading(false);
@@ -1139,6 +1266,11 @@ export function SessionSurface(props: SessionSurfaceProps) {
         if (kind === "agent") return [{ type: "agent", name: value } satisfies ComposerDraft["parts"][number]];
         if (kind === "file") return [{ type: "file", path: value, label: value } satisfies ComposerDraft["parts"][number]];
         if (kind === "app") return [{ type: "app", name: value } satisfies ComposerDraft["parts"][number]];
+        if (kind === "code") return [{ type: "code", value, filePath: value, snippetKind: "file", anchor: value } satisfies ComposerDraft["parts"][number]];
+        if (kind === "docs") return [{ type: "docs", value, title: value } satisfies ComposerDraft["parts"][number]];
+        if (kind === "git") return [{ type: "git", value } satisfies ComposerDraft["parts"][number]];
+        if (kind === "terminal") return [{ type: "terminal", value, command: value } satisfies ComposerDraft["parts"][number]];
+        if (kind === "rules") return [{ type: "rules", value, name: value } satisfies ComposerDraft["parts"][number]];
       }
       return [{ type: "text", text: segment } satisfies ComposerDraft["parts"][number]];
     });
@@ -1185,6 +1317,19 @@ export function SessionSurface(props: SessionSurfaceProps) {
     } catch (nextError) {
       setError({ message: nextError instanceof Error ? nextError.message : "Failed to copy transcript." });
     }
+  };
+
+  const tts = useTextToSpeech();
+  const handleToggleReadAloud = () => {
+    if (tts.speaking) {
+      tts.stop();
+      return;
+    }
+    const lastAssistant = [...renderedMessages].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return;
+    const text = messageToReadableText(lastAssistant);
+    if (!text) return;
+    tts.speak(text);
   };
 
   // Core sender shared by initial send and steered follow-ups. OpenCode
@@ -1426,6 +1571,8 @@ export function SessionSurface(props: SessionSurfaceProps) {
       `${draft}${next.map((attachment) => `[attachment ${attachment.id}]`).join("")}`,
     );
   };
+
+  const recording = useScreenRecording(handleAttachFiles);
 
   const handleRemoveAttachment = (id: string) => {
     const target = attachments.find((item) => item.id === id);
@@ -1878,6 +2025,14 @@ export function SessionSurface(props: SessionSurfaceProps) {
       .finally(() => setRestoringRevertedMessages(false));
   }, [props.onRestoreRevertedSession, props.sessionId, restoringRevertedMessages]);
 
+  // 完全访问权限模式：权限请求自动以 "always" 应答（WorkBuddy 权限管理对标）。
+  useEffect(() => {
+    if (props.permissionMode !== "full") return;
+    if (!props.activePermission) return;
+    if (props.permissionReplyBusy) return;
+    props.respondPermission?.(props.activePermission.id, "always");
+  }, [props.activePermission, props.permissionMode, props.permissionReplyBusy, props.respondPermission]);
+
   const sessionScrollTopControlAction = useMemo<OpenworkControlAction>(() => ({
     id: "session.scroll_top",
     label: "Go to the top of the session",
@@ -2095,6 +2250,17 @@ export function SessionSurface(props: SessionSurfaceProps) {
           scrollRef={scrollRef}
           onBeforeJump={handleFindBeforeJump}
         />
+        {tts.supported ? (
+          <button
+            type="button"
+            className="absolute right-4 top-4 z-10 flex items-center gap-1 rounded-md border border-gray-4 bg-gray-1 px-2 py-1 text-xs text-gray-10 transition-colors hover:bg-gray-2"
+            onClick={handleToggleReadAloud}
+            aria-label={tts.speaking ? "Stop reading" : "Read aloud"}
+          >
+            {tts.speaking ? <Square size={12} /> : <Volume2 size={12} />}
+            {tts.speaking ? "Stop" : "Read"}
+          </button>
+        ) : null}
       </div>
 
       <div ref={composerShellRef} className="shrink-0 px-0 pb-2 pt-2">
@@ -2161,10 +2327,19 @@ export function SessionSurface(props: SessionSurfaceProps) {
         onRemoveAttachment={handleRemoveAttachment}
         attachmentsEnabled={props.attachmentsEnabled}
         attachmentsDisabledReason={props.attachmentsDisabledReason}
+        onRecordScreen={recording.openRecorder}
         modelVariantLabel={sessionModel.modelVariantLabel}
         modelVariant={sessionModel.modelVariant}
         modelBehaviorOptions={sessionModel.modelBehaviorOptions}
         onModelVariantChange={sessionModel.setVariant}
+        taskMode={props.taskMode ?? "ask"}
+        onTaskModeChange={props.onTaskModeChange}
+        workspaceLabel={props.workspaceLabel}
+        workspaceOptions={props.workspaceOptions}
+        onWorkspaceSelect={props.onWorkspaceSelect}
+        onOpenCreateWorkspace={props.onOpenCreateWorkspace}
+        permissionMode={props.permissionMode}
+        onPermissionModeChange={props.onPermissionModeChange}
         agentLabel={props.agentLabel}
         selectedAgent={props.selectedAgent}
         agentIsCli={props.agentIsCli}
@@ -2181,6 +2356,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         listImportedPlugins={listImportedPlugins}
         importedPlugins={toolImportedPlugins}
         onOpenSettingsSection={props.onOpenSettingsSection}
+        onOpenCapabilityManager={props.onOpenCapabilityManager}
         recentFiles={props.recentFiles}
         searchFiles={props.searchFiles}
         onInsertMention={handleInsertMention}
@@ -2190,9 +2366,10 @@ export function SessionSurface(props: SessionSurfaceProps) {
         pastedText={pasteParts}
         onExpandPastedText={handleExpandPastedText}
         onRemovePastedText={handleRemovePastedText}
-        isRemoteWorkspace={props.isRemoteWorkspace}
-          isSandboxWorkspace={props.isSandboxWorkspace}
-          onUploadInboxFiles={props.onUploadInboxFiles ?? handleUploadInboxFiles}
+          isRemoteWorkspace={props.isRemoteWorkspace}
+        isSandboxWorkspace={props.isSandboxWorkspace}
+        extraMentionItems={extraMentionItems}
+        onUploadInboxFiles={props.onUploadInboxFiles ?? handleUploadInboxFiles}
           compactTopSpacing={Boolean(props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedDrafts.length > 0)}
           topAccessory={
             props.activeQuestion || (props.todos ?? []).some((todo) => todo.content.trim()) || props.activePermission || queuedDrafts.length > 0 ? (
@@ -2233,6 +2410,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
         </DevProfiler>
       </div>
       {/* Error display moved inline into the session conversation area */}
+      {recording.dialog}
       {props.developerMode ? <SessionDebugPanel model={model} snapshot={snapshot} /> : null}
     </div>
     </DevProfiler>

@@ -2,12 +2,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
+  Gift,
   LogOut,
   MessageCircleMore,
+  Moon,
   MoreHorizontal,
+  RefreshCw,
   Settings,
   Sparkles,
   Stethoscope,
+  Sun,
   UserRound,
 } from "lucide-react";
 import { useNavigate } from "react-router";
@@ -34,6 +38,7 @@ import {
   createDenClient,
   readDenBootstrapConfig,
   readDenSettings,
+  type DenCreditsBalance,
 } from "../../../../app/lib/den";
 import { markDesktopSignInInitiated } from "../../../../app/lib/den-sign-in-intent";
 import { exchangeHandoffAndSignIn } from "../../../../app/lib/den-handoff";
@@ -213,6 +218,19 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
   const [initializing, setInitializing] = useState(
     () => Date.now() - BOOT_STARTED_AT < INITIALIZING_MS,
   );
+  const [darkMode, setDarkMode] = useState(() =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
+  );
+
+  const toggleDarkMode = useCallback(() => {
+    setDarkMode((prev) => {
+      const next = !prev;
+      if (typeof document !== "undefined") {
+        document.documentElement.classList.toggle("dark", next);
+      }
+      return next;
+    });
+  }, []);
 
   const hasOpenWorkModels = useMemo(
     () => hasOpenWorkModelsProvider(props.providerConnectedIds),
@@ -278,6 +296,30 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
   const accountDetail = signedIn
     ? (user.name ? user.email : "OpenWork Cloud")
     : restoringSession ? "Restoring your session" : "Sync with OpenWork Cloud";
+
+  // 积分只有 Den 余额这一个来源：没有 org / token 就不显示这一行，不编数字。
+  const [credits, setCredits] = useState<DenCreditsBalance | null>(null);
+  useEffect(() => {
+    const settings = readDenSettings();
+    const orgId = settings.activeOrgId?.trim() ?? "";
+    const token = settings.authToken?.trim() ?? "";
+    if (!signedIn || !orgId || !token) {
+      setCredits(null);
+      return;
+    }
+    let cancelled = false;
+    void createDenClient({ baseUrl: settings.baseUrl, token })
+      .getCreditsBalance(orgId)
+      .then((balance) => {
+        if (!cancelled) setCredits(balance);
+      })
+      .catch(() => {
+        if (!cancelled) setCredits(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [signedIn]);
 
   const runtimeStatus = props.showConnectionStatus
     ? resolveRuntimeStatus({
@@ -385,7 +427,29 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
       />
       <DropdownMenuContent side="top" align="start" className="w-72">
         {signedIn ? (
-          <div className="px-2 py-1.5 text-[11px] text-muted-foreground">{user.email}</div>
+          <div className="flex items-center gap-2.5 border-b border-border/50 px-2 py-2.5">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-primary">
+              {accountInitials(user.name, user.email)}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-medium text-foreground">
+                {user.name?.trim() || user.email}
+              </div>
+              <div className="truncate text-[11px] text-muted-foreground">{user.email}</div>
+            </div>
+          </div>
+        ) : null}
+
+        {signedIn && credits ? (
+          <div className="mx-1 mb-1 flex items-center gap-2 rounded-lg bg-gradient-to-r from-primary/5 to-primary/10 px-2.5 py-2">
+            <Sparkles className="size-3.5 shrink-0 text-primary" />
+            <div className="min-w-0">
+              <div className="text-[11px] font-medium text-foreground">
+                {credits.balance} {t("credits.points")}
+              </div>
+              <div className="text-[10px] text-muted-foreground">{t(`credits.tier_${credits.tier}`)}</div>
+            </div>
+          </div>
         ) : null}
 
         {showStatus ? (
@@ -474,6 +538,22 @@ export function AccountStatusMenu(props: AccountStatusMenuProps) {
           </DropdownMenuItem>
         ) : null}
         {connectNeedsAttention || promoVisible ? <DropdownMenuSeparator /> : null}
+
+        {signedIn ? (
+          <DropdownMenuItem onClick={() => navigate("/settings/cloud-account")}>
+            <Gift className="size-3.5" />
+            去邀约
+          </DropdownMenuItem>
+        ) : null}
+        <DropdownMenuItem onClick={toggleDarkMode}>
+          {darkMode ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
+          {darkMode ? "浅色模式" : "深色模式"}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => platform.openLink("https://openworklabs.com/changelog")}>
+          <RefreshCw className="size-3.5" />
+          检查更新
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
 
         {props.showSettingsButton !== false ? (
           <DropdownMenuItem onClick={openSettings}>

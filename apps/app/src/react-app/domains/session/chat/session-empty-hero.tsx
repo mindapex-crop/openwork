@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
-import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, MessageSquare, Sparkles, X, Zap, Lightbulb } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowRight, Megaphone, X, Zap } from "lucide-react";
 
 import { DEFAULT_MODEL } from "@/app/constants";
 import type { ComposerAttachment } from "@/app/types";
@@ -18,6 +18,7 @@ import {
 import { usePlatform } from "@/react-app/kernel/platform";
 import { t } from "@/i18n";
 import { NewTaskComposer, type NewTaskComposerContext, type TaskMode } from "./new-task-composer";
+import { TASK_MODE_OPTIONS } from "./task-mode";
 
 type HeroSuggestion = {
   title: string;
@@ -54,6 +55,11 @@ export type SessionEmptyHeroProps = {
   busy?: boolean;
   /** Called with the task prompt and attachments; the caller creates the session (and workspace if needed). */
   onRunTask: (prompt: string, attachments: ComposerAttachment[]) => void;
+  /**
+   * Plan-mode hook: called with the raw prompt when the user submits while
+   * taskMode is "plan". Wires the hero into the planning lifecycle.
+   */
+  onStartPlan?: (prompt: string) => void;
   onOpenProviderAuth?: () => void;
   /** Workspace-scoped wiring for the full composer (skills, agents, models). */
   composer?: NewTaskComposerContext | null;
@@ -86,31 +92,7 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
   // client finishes initialising.
   const taskModeFromContext = props.composer?.taskMode ?? "ask";
   const canChangeMode = Boolean(props.composer?.onTaskModeChange);
-  const taskModes = useMemo<
-    { value: TaskMode; label: string; description: string; icon: React.ComponentType<{ className?: string }> }[]
-  >(
-    () => [
-      {
-        value: "ask",
-        label: t("task_mode.ask"),
-        description: t("task_mode.ask_desc"),
-        icon: MessageSquare,
-      },
-      {
-        value: "craft",
-        label: t("task_mode.craft"),
-        description: t("task_mode.craft_desc"),
-        icon: Sparkles,
-      },
-      {
-        value: "plan",
-        label: t("task_mode.plan"),
-        description: t("task_mode.plan_desc"),
-        icon: Lightbulb,
-      },
-    ],
-    [],
-  );
+  const taskModes = TASK_MODE_OPTIONS;
 
   // Quiet inline lead to OpenWork Models: replaces the old startup dialog
   // interrupt. Shown only while the session runs on the free starter model
@@ -149,9 +131,9 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
     <div className="mx-auto w-full max-w-[640px] space-y-6 px-4 max-lg:px-4 sm:px-6">
       <div className="space-y-1.5 text-center">
         <h2 className="text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground">
-          What do you need done?
+          OpenWork, 我帮你
         </h2>
-        <p className="text-[13px] text-muted-foreground">Describe it in plain language</p>
+        <p className="text-[13px] text-muted-foreground">用自然语言描述你的需求，我来帮你完成</p>
       </div>
 
       <div className="flex justify-center">
@@ -188,6 +170,7 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
         draft={prompt}
         onDraftChange={setPrompt}
         onRunTask={submit}
+        onStartPlan={props.onStartPlan}
         busy={props.busy ?? false}
         context={props.composer ?? null}
       />
@@ -232,6 +215,61 @@ export function SessionEmptyHero(props: SessionEmptyHeroProps) {
           </div>
         </button>
       ) : null}
+
+      {/* WorkBuddy 风格分类标签 */}
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {[
+          { label: "文档处理", prompt: "帮我处理一份文档：" },
+          { label: "金融服务", prompt: "帮我分析一个金融投资问题：" },
+          { label: "数据分析及可视化", prompt: "帮我分析以下数据并生成可视化报告：" },
+          { label: "个人工作台", prompt: "帮我整理个人工作台：" },
+          { label: "幻灯片", prompt: "帮我创建一份幻灯片：" },
+        ].map((cat) => (
+          <button
+            key={cat.label}
+            type="button"
+            className="rounded-full border border-border bg-background px-3 py-1 text-[12px] text-muted-foreground transition-colors hover:border-primary/40 hover:bg-accent hover:text-foreground"
+            onClick={() => fillPrompt(cat.prompt)}
+          >
+            {cat.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 快捷操作 chips */}
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {[
+          { icon: "📝", label: "写文章", prompt: "帮我写一篇文章，主题是：" },
+          { icon: "📊", label: "分析数据", prompt: "帮我分析以下数据并生成报告：" },
+          { icon: "🔍", label: "审查代码", prompt: "请审查我的代码改动并给出建议：" },
+          { icon: "🌐", label: "浏览器任务", prompt: "帮我在浏览器中完成以下操作：" },
+          { icon: "📋", label: "整理文档", prompt: "帮我整理和总结以下文档内容：" },
+          { icon: "⚡", label: "自动化", prompt: "帮我创建一个自动化任务：" },
+        ].map((chip) => (
+          <button
+            key={chip.label}
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            onClick={() => fillPrompt(chip.prompt)}
+          >
+            <span>{chip.icon}</span>
+            {chip.label}
+          </button>
+        ))}
+      </div>
+
+      {/* WorkBuddy 风格活动推广横幅 */}
+      <div className="flex items-center gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+          <Megaphone className="size-4 text-primary" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-medium text-foreground">OpenWork 新功能上线</p>
+          <p className="mt-0.5 truncate text-[12px] text-muted-foreground">
+            探索专家协作、自动化工作流和技能广场，提升你的工作效率
+          </p>
+        </div>
+      </div>
 
       <div className="grid gap-2 sm:grid-cols-2">
         {suggestions.map((suggestion) => (

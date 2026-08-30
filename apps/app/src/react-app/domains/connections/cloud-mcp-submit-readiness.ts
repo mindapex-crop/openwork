@@ -69,6 +69,8 @@ export type CloudMcpSubmissionAuthResolution =
 export type CloudMcpSubmissionResult =
   | { outcome: "sent"; bypassed: boolean }
   | { outcome: "accepted" }
+  /** A client-side command consumed the draft; no run started, so the composer still clears. */
+  | { outcome: "handled" }
   | { outcome: "blocked"; issue: CloudMcpSubmissionIssue }
   | { outcome: "cancelled"; reason: "context_changed" | "unmounted" };
 

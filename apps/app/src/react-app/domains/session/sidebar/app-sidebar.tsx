@@ -7,11 +7,15 @@ import {
   ArchiveRestore,
   ArrowLeft,
   ArrowRight,
+  Bot,
+  Cable,
   Clock3,
   ChevronRight,
   Columns2,
   FolderPlus,
-  LayoutGrid,
+  FolderKanban,
+  Lightbulb,
+
   MoreHorizontal,
   Pencil,
   Pin,
@@ -19,17 +23,16 @@ import {
   Plus,
   Search,
   Share2,
-  Store,
   Trash2,
   RefreshCw,
   RotateCcw,
   Settings,
   BookOpen,
   FolderOpen,
+  ListChecks,
   SquarePen,
   Tag,
   X,
-  FolderKanban,
   Sparkles,
   Users,
 } from "lucide-react";
@@ -158,6 +161,12 @@ import { WorkspaceAvatarPicker } from "./workspace-avatar-picker";
 import { useWorkbenchStore } from "../chat/workbench-store";
 import { SidebarDestination } from "./sidebar-destination";
 import { SessionTitle } from "./session-title";
+import { useLocation, useNavigate } from "react-router";
+import { SIDEBAR_MODULE_ROUTE_REGEXES, SIDEBAR_NAV_ROUTE_REGEXES } from "./sidebar-nav";
+import { SessionStatusDot } from "../../sessions/session-status-badge";
+import { SessionFilterPanel } from "../../sessions/session-filter-panel";
+import type { SessionStatus } from "../../sessions/session-types";
+import { useSessionMetadataStore } from "../../sessions/session-metadata-store";
 
 /** Paper Desktop: unread #2FBE54, needs-action #E8933A (14px artboard → ~8px app). */
 const OUTCOME_DOT_UNREAD = "#2FBE54";
@@ -857,14 +866,10 @@ export type AppSidebarProps = {
   onOpenAutomations?: () => void;
   projectsActive?: boolean;
   onOpenProjects?: () => void;
+  plansActive?: boolean;
+  onOpenPlans?: () => void;
   skillsActive?: boolean;
   onOpenSkills?: () => void;
-  knowledgeActive?: boolean;
-  onOpenKnowledge?: () => void;
-  marketplaceActive?: boolean;
-  collabActive?: boolean;
-  onOpenMarketplace?: () => void;
-  onOpenCollab?: () => void;
   /** Opens the cross-session message search dialog (Cmd/Ctrl+Shift+F). */
   onOpenSessionSearch?: () => void;
   /** Back/forward across recently viewed conversations, rendered at the top of the sidebar. */
@@ -897,6 +902,23 @@ function isSessionActivityStatus(status: string | undefined): status is SessionA
 }
 
 export function AppSidebar(props: AppSidebarProps) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const pathname = location.pathname;
+  const routeActive = (regex: RegExp) => regex.test(pathname);
+  // "助理" is the default landing surface: active unless another module is.
+  const isAssistantActive = !(
+    routeActive(SIDEBAR_NAV_ROUTE_REGEXES.plans)
+    || routeActive(SIDEBAR_NAV_ROUTE_REGEXES.experts)
+    || routeActive(SIDEBAR_NAV_ROUTE_REGEXES.skills)
+    || routeActive(SIDEBAR_NAV_ROUTE_REGEXES.connectors)
+    || routeActive(SIDEBAR_NAV_ROUTE_REGEXES.library)
+    || routeActive(SIDEBAR_NAV_ROUTE_REGEXES.automations)
+    || routeActive(SIDEBAR_NAV_ROUTE_REGEXES.projects)
+    || routeActive(SIDEBAR_NAV_ROUTE_REGEXES.inspiration)
+    || routeActive(SIDEBAR_MODULE_ROUTE_REGEXES.collab)
+    || routeActive(SIDEBAR_MODULE_ROUTE_REGEXES.marketplace)
+  );
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = React.useState<Set<string>>(
     () => new Set(),
   );
@@ -1052,6 +1074,28 @@ export function AppSidebar(props: AppSidebarProps) {
     sessionNumberShortcutByTarget,
   };
 
+  // Session filter state (local to the sidebar)
+  const [filterStatuses, setFilterStatuses] = React.useState<SessionStatus[]>([]);
+  const [filterSearch, setFilterSearch] = React.useState("");
+  const [showArchived, setShowArchived] = React.useState(false);
+
+  // Sync session metadata for filtering (upsert on data change)
+  const metadataStore = useSessionMetadataStore;
+  React.useEffect(() => {
+    const metaById = metadataStore.getState().metadataById;
+    for (const group of props.workspaceSessionGroups) {
+      for (const session of group.sessions) {
+        if (!metaById[session.id]) {
+          metadataStore.getState().upsertMetadata({
+            id: session.id,
+            title: session.title,
+            status: "pending",
+          });
+        }
+      }
+    }
+  }, [props.workspaceSessionGroups, metadataStore]);
+
   const brandLogoUrl = useBrandLogoUrl();
   const pinnedIds = useSessionManagementStore((state) => state.pinnedIds);
   const pinnedSessions = React.useMemo(() => {
@@ -1129,6 +1173,11 @@ export function AppSidebar(props: AppSidebarProps) {
           </div>
         ) : null}
         <SidebarHeader className="pb-0 pe-0">
+          <div className="px-3 pb-1 pt-1">
+            <span className="text-[10px] font-medium text-sidebar-foreground/40 tracking-wide">
+              OpenWork v0.18.23
+            </span>
+          </div>
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
@@ -1158,6 +1207,46 @@ export function AppSidebar(props: AppSidebarProps) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ) : null}
+            <SidebarDestination
+              active={isAssistantActive}
+              icon={Bot}
+              label={t("sidebar.assistant")}
+              onSelect={() => navigate("/session")}
+            />
+            {props.onOpenPlans ? (
+              <SidebarDestination
+                active={props.plansActive === true}
+                icon={ListChecks}
+                label={t("sidebar.plans")}
+                onSelect={props.onOpenPlans}
+              />
+            ) : null}
+            <SidebarDestination
+              active={routeActive(SIDEBAR_NAV_ROUTE_REGEXES.experts)}
+              icon={Users}
+              label={t("sidebar.experts")}
+              onSelect={() => navigate("/experts")}
+            />
+            {props.onOpenSkills ? (
+              <SidebarDestination
+                active={props.skillsActive === true}
+                icon={Sparkles}
+                label={t("sidebar.skills")}
+                onSelect={props.onOpenSkills}
+              />
+            ) : null}
+            <SidebarDestination
+              active={routeActive(SIDEBAR_NAV_ROUTE_REGEXES.connectors)}
+              icon={Cable}
+              label={t("sidebar.connectors")}
+              onSelect={() => navigate("/connectors")}
+            />
+            <SidebarDestination
+              active={routeActive(SIDEBAR_NAV_ROUTE_REGEXES.library)}
+              icon={BookOpen}
+              label={t("sidebar.library")}
+              onSelect={() => navigate("/library")}
+            />
             {props.onOpenAutomations ? (
               <SidebarDestination
                 active={props.automationsActive === true}
@@ -1165,12 +1254,12 @@ export function AppSidebar(props: AppSidebarProps) {
                 label={t("sidebar.automations")}
                 labelContent={(
                   <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <span className="truncate">Automations</span>
+                    <span className="truncate">{t("sidebar.automations")}</span>
                     {props.automationsNeedAttention ? (
                       <AlertTriangle
                         data-automations-attention-indicator
                         className="ml-auto size-3.5 shrink-0 text-warning"
-                        aria-label="An Automation needs attention"
+                        aria-label={t("sidebar.automations_attention")}
                       />
                     ) : null}
                   </span>
@@ -1186,43 +1275,11 @@ export function AppSidebar(props: AppSidebarProps) {
                 onSelect={props.onOpenProjects}
               />
             ) : null}
-            {props.onOpenSkills ? (
-              <SidebarDestination
-                active={props.skillsActive === true}
-                icon={Sparkles}
-                label={t("sidebar.skills")}
-                onSelect={props.onOpenSkills}
-              />
-            ) : null}
-            {props.onOpenCollab ? (
-              <SidebarDestination
-                active={props.collabActive === true}
-                icon={Users}
-                label={t("sidebar.collab")}
-                onSelect={props.onOpenCollab}
-              />
-            ) : null}
-            {props.onOpenMarketplace ? (
-              <SidebarDestination
-                active={props.marketplaceActive === true || false}
-                icon={Store}
-                label={t("sidebar.marketplace")}
-                onSelect={props.onOpenMarketplace}
-              />
-            ) : null}
-            {props.onOpenKnowledge ? (
-              <SidebarDestination
-                active={props.knowledgeActive === true}
-                icon={BookOpen}
-                label={t("sidebar.knowledge")}
-                onSelect={props.onOpenKnowledge}
-              />
-            ) : null}
             <SidebarDestination
-              active={props.extensionsActive === true}
-              icon={LayoutGrid}
-              label={t("settings.tab_extensions")}
-              onSelect={props.onOpenExtensions}
+              active={routeActive(SIDEBAR_NAV_ROUTE_REGEXES.inspiration)}
+              icon={Lightbulb}
+              label={t("sidebar.inspiration")}
+              onSelect={() => navigate("/inspiration")}
             />
             <SidebarMenuItem>
               <NotificationBell variant="sidebar-row" />
@@ -1246,6 +1303,22 @@ export function AppSidebar(props: AppSidebarProps) {
             {pinnedSessions.length > 0 ? (
               <GlobalPinnedSessions entries={pinnedSessions} />
             ) : null}
+            <div className="px-3 py-2">
+              <SessionFilterPanel
+                activeStatuses={filterStatuses}
+                onStatusesChange={setFilterStatuses}
+                searchQuery={filterSearch}
+                onSearchChange={setFilterSearch}
+                showArchived={showArchived}
+                onToggleArchived={() => setShowArchived((p) => !p)}
+                resultCount={
+                  Object.keys(metadataStore.getState().metadataById).length || props.workspaceSessionGroups.reduce(
+                    (sum, g) => sum + g.sessions.length,
+                    0,
+                  )
+                }
+              />
+            </div>
             <div className={cn("group/workspaces-header flex items-center pb-1 pr-2 pt-1", SIDEBAR_SECTION_LANE)}>
               <span className={SIDEBAR_SECTION_LABEL}>
                 {t("workspace_list.title")}
@@ -2417,8 +2490,15 @@ function SessionMenuItem({
 
   // Pinned/archived rows identify their workspace via the tooltip title
   // only — no workspace color dot in these sections.
+  const sessionMeta = useSessionMetadataStore((s) => s.metadataById[session.id]);
+  const enhancedStatus = sessionMeta?.status;
   const leading = (
-    <SessionLoadingIndicator status={sessionActivityStatus} isActiveWork={resolvedActiveWork} />
+    <span className="flex items-center gap-1">
+      <SessionLoadingIndicator status={sessionActivityStatus} isActiveWork={resolvedActiveWork} />
+      {enhancedStatus && enhancedStatus !== "pending" && (
+        <SessionStatusDot status={enhancedStatus} />
+      )}
+    </span>
   );
 
   const trailing = (

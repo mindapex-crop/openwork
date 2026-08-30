@@ -21,6 +21,7 @@ import {
   LayoutSectionHeader,
   LayoutSectionItem,
   LayoutSectionItemDescription,
+  LayoutSectionItemFootnote,
   LayoutSectionItemHeader,
   LayoutSectionItemHeaderActions,
   LayoutSectionItemTitle,
@@ -29,6 +30,10 @@ import {
 } from "../settings-layout";
 import { DesktopIntegrationSection } from "../desktop-integration-section";
 import { CollabModeSection } from "../collab-mode-section";
+import { MobileAccessSection } from "../mobile-access-section";
+import { CreditsSection } from "../credits-section";
+import { WorkModeStep } from "../../onboarding/work-mode-step";
+import type { WorkMode } from "../../onboarding/work-mode";
 
 export type PreferencesViewProps = {
   busy: boolean;
@@ -47,6 +52,8 @@ export type PreferencesViewProps = {
   onToggleContinuousEngine: () => void;
   memoryEnabled: boolean;
   onToggleMemory: () => void;
+  workMode: WorkMode;
+  onWorkModeChange: (mode: WorkMode) => void;
 };
 
 function desktopNotificationPreferenceLabel(value: DesktopNotificationPreference) {
@@ -69,6 +76,23 @@ export function PreferencesView(props: PreferencesViewProps) {
   return (
     <LayoutStack>
       <CollabModeSection />
+
+      <MobileAccessSection />
+
+      <CreditsSection />
+
+      <LayoutSection>
+        <LayoutSectionHeader>
+          <LayoutSectionTitle>{t("work_mode.title")}</LayoutSectionTitle>
+          <LayoutSectionDescription>{t("work_mode.description")}</LayoutSectionDescription>
+        </LayoutSectionHeader>
+        <LayoutSectionItem>
+          <WorkModeStep onSelect={props.onWorkModeChange} compact />
+          {props.workMode === "daily" ? (
+            <LayoutSectionItemFootnote>{t("work_mode.hide_developer_hint")}</LayoutSectionItemFootnote>
+          ) : null}
+        </LayoutSectionItem>
+      </LayoutSection>
 
       <LayoutSection>
         <LayoutSectionHeader>

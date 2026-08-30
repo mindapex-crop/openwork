@@ -94,11 +94,19 @@ import { MemoryView } from "@/react-app/domains/settings/pages/memory-view";
 import { useFeatureFlagsPreferences } from "@/react-app/domains/settings/state/feature-flags-preferences";
 import { DebugView } from "@/react-app/domains/settings/pages/debug-view";
 import { EnvironmentView } from "@/react-app/domains/settings/pages/environment-view";
-import { ExtensionsView, type ExtensionsSection } from "@/react-app/domains/settings/pages/extensions-view";
+import { ExtensionsView, type ExtensionsSection, type ExtensionsViewProps } from "@/react-app/domains/settings/pages/extensions-view";
+import { ConnectorsView } from "@/react-app/domains/settings/pages/connectors-view";
 import { McpView } from "@/react-app/domains/settings/pages/mcp-view";
 import { RecoveryView } from "@/react-app/domains/settings/pages/recovery-view";
 import { UpdatesView } from "@/react-app/domains/settings/pages/updates-view";
 import { ImConnectorsSection } from "@/react-app/domains/settings/im-connectors-section";
+import { UsageView } from "@/react-app/domains/settings/pages/usage-view";
+import type { UsageSummary } from "@/react-app/domains/settings/usage-store";
+import {
+  hideDeveloperElements,
+  readWorkMode,
+  writeWorkMode,
+} from "@/react-app/domains/onboarding/work-mode";
 import { useDebugViewModel } from "@/react-app/domains/settings/state/debug-view-model";
 import { useElectronUpdaterState } from "@/react-app/domains/settings/state/electron-updater-state";
 import { CloudSessionProvider, useCloudSession } from "@/react-app/domains/settings/cloud/cloud-session-provider";
@@ -294,6 +302,9 @@ export function parseSettingsPath(pathname: string): {
     case "cloud-account":
     case "cloud-providers":
     case "memory":
+    case "usage":
+    case "connectors":
+    case "im-connectors":
       return { tab: head, redirectPath: null };
     case "connect":
       return { tab: "extensions", redirectPath: "extensions", extensionsSection: "all" };
@@ -2177,6 +2188,99 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
     navigateSettingsPath("cloud-account");
   };
 
+  // Shared by the Extensions tab and the Connectors tab so the MCP inventory
+  // render-prop stays in one place (Connectors aggregates MCP + plugins +
+  // extensions + IM connectors + cloud providers).
+  const mcpViewRenderProp: ExtensionsViewProps["mcpView"] = ({ initialFilter, onFilterChange, initialState, onStateChange, detailId, onDetailIdChange }) => (
+    <McpView
+      busy={busy}
+      selectedWorkspaceRoot={selectedWorkspaceRoot}
+      isRemoteWorkspace={isRemoteWorkspace}
+      mcpServers={connectionsSnapshot.mcpServers}
+      mcpStatus={connectionsSnapshot.mcpStatus}
+      mcpLastUpdatedAt={connectionsSnapshot.mcpLastUpdatedAt}
+      mcpStatuses={connectionsSnapshot.mcpStatuses}
+      mcpConnectingName={connectionsSnapshot.mcpConnectingName}
+      selectedMcp={connectionsSnapshot.selectedMcp}
+      setSelectedMcp={(name) => connectionsStore.setSelectedMcp(name)}
+      quickConnect={extensionItems.quickConnectEntries}
+      enablementContext={enablementContext}
+      builtInExtensionsDisabled={builtInExtensionsDisabled}
+      connectMcp={(entry) => {
+        return connectionsStore.connectMcp(entry);
+      }}
+      configSlotForEntry={extensionController.configSlotForEntry}
+      isExtensionConnected={extensionController.isConnected}
+      authorizeMcp={(entry) => {
+        void connectionsStore.authorizeMcp(entry);
+      }}
+      logoutMcpAuth={(name) => connectionsStore.logoutMcpAuth(name)}
+      removeMcp={(name) => {
+        void connectionsStore.removeMcp(name);
+      }}
+      setMcpEnabled={
+        routeOpenworkStatus === "connected" && routeOpenworkCapabilities?.mcp?.write
+          ? (name, enabled) => connectionsStore.setMcpEnabled(name, enabled)
+          : undefined
+      }
+      readConfigFile={(scope) => connectionsStore.readMcpConfigFile(scope)}
+      installedSkills={[
+        ...extensionItems.installedSkills,
+        ...connectCapabilities.skills.filter(
+          (skill) => !extensionItems.installedSkills.some(
+            (installed) => installed.name.toLowerCase() === skill.name.toLowerCase(),
+          ),
+        ),
+      ]}
+      availableConnectMcpServers={connectCapabilities.mcpServers.filter(
+        (entry) => !orgMcpConnectionItems.some((item) =>
+          item.name.localeCompare(entry.name, undefined, { sensitivity: "accent" }) === 0
+        ),
+      )}
+      availableConnectMcpStatuses={connectCapabilities.mcpStatuses}
+      inventoryLoading={connectCapabilitiesLoading || (orgMcpConnections.loading && !orgMcpConnections.loaded)}
+      installedPlugins={extensionItems.installedCloudPlugins}
+      orgMcpItems={orgMcpConnectionItems}
+      organizationName={cloudSession.activeOrgName}
+      orgMcpError={orgMcpConnections.error}
+      uninstallSkill={(name) => { void extensionsStore.uninstallSkill(name); }}
+      removeCloudPlugin={(pluginId) => { void extensionsStore.removeCloudOrgPlugin(pluginId); }}
+      orgMcpConnectingId={orgMcpConnections.connectingId}
+      connectOrgMcp={(connectionId) => { void orgMcpConnections.connect(connectionId); }}
+      reconnectOrgMcp={(connectionId) => { void orgMcpConnections.connect(connectionId, { forceFreshAuthorization: true }); }}
+      orgMcpDisconnectingId={orgMcpConnections.disconnectingId}
+      disconnectOrgMcp={(connectionId) => { void orgMcpConnections.disconnect(connectionId); }}
+      readSkill={(name) => extensionsStore.readSkill(name)}
+      previewClaudePlugin={(url) => extensionsStore.previewClaudePlugin(url)}
+      installClaudePlugin={(url) => extensionsStore.installClaudePlugin(url)}
+      initialFilter={initialFilter}
+      onFilterChange={onFilterChange}
+      initialState={initialState}
+      onStateChange={onStateChange}
+      detailId={detailId}
+      onDetailIdChange={onDetailIdChange}
+    />
+  );
+
+  const cloudProvidersView = (
+    <CloudProvidersView
+      checkDesktopAppRestriction={checkDesktopRestriction}
+      cloudOrgProviders={providerAuthSnapshot.cloudOrgProviders}
+      connectCloudProvider={providerAuthStore.connectCloudProvider}
+      importedCloudProviders={providerAuthSnapshot.importedCloudProviders}
+      importsUnavailable={
+        openworkServerSnapshot.openworkServerCapabilities?.config?.read === false ||
+        openworkServerSnapshot.openworkServerCapabilities?.config?.write === false
+      }
+      lastSyncError={providerAuthSnapshot.lastSyncError}
+      openworkServerAvailable={Boolean(openworkServerSnapshot.openworkServerClient)}
+      onOpenAccount={openCloudAccountSettings}
+      refreshCloudOrgProviders={providerAuthStore.refreshCloudOrgProviders}
+      runCloudProviderSync={providerAuthStore.runCloudProviderSync}
+      serverSync={providerAuthSnapshot.cloudProviderServerSync}
+    />
+  );
+
   const settingsView = (() => {
     switch (route.tab) {
       case "general":
@@ -2287,6 +2391,15 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             onToggleContinuousEngine={handleToggleContinuousEngine}
             memoryEnabled={memoryEnabled}
             onToggleMemory={toggleMemory}
+            workMode={readWorkMode()}
+            onWorkModeChange={(mode) => {
+              writeWorkMode(mode);
+              // 日常办公模式隐藏开发者元素：同步关闭开发者模式。
+              if (hideDeveloperElements(mode)) {
+                try { window.localStorage.setItem("openwork.developerMode", "0"); } catch {}
+                setDeveloperMode(false);
+              }
+            }}
           />
         );
       case "extensions":
@@ -2322,77 +2435,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
               void orgMcpConnections.refresh();
               void refreshConnectCapabilities({ force: true });
             }}
-            mcpView={({ initialFilter, onFilterChange, initialState, onStateChange, detailId, onDetailIdChange }) => (
-              <McpView
-                busy={busy}
-                selectedWorkspaceRoot={selectedWorkspaceRoot}
-                isRemoteWorkspace={isRemoteWorkspace}
-                mcpServers={connectionsSnapshot.mcpServers}
-                mcpStatus={connectionsSnapshot.mcpStatus}
-                mcpLastUpdatedAt={connectionsSnapshot.mcpLastUpdatedAt}
-                mcpStatuses={connectionsSnapshot.mcpStatuses}
-                mcpConnectingName={connectionsSnapshot.mcpConnectingName}
-                selectedMcp={connectionsSnapshot.selectedMcp}
-                setSelectedMcp={(name) => connectionsStore.setSelectedMcp(name)}
-                quickConnect={extensionItems.quickConnectEntries}
-                enablementContext={enablementContext}
-                builtInExtensionsDisabled={builtInExtensionsDisabled}
-                connectMcp={(entry) => {
-                  return connectionsStore.connectMcp(entry);
-                }}
-                configSlotForEntry={extensionController.configSlotForEntry}
-                isExtensionConnected={extensionController.isConnected}
-                authorizeMcp={(entry) => {
-                  void connectionsStore.authorizeMcp(entry);
-                }}
-                logoutMcpAuth={(name) => connectionsStore.logoutMcpAuth(name)}
-                removeMcp={(name) => {
-                  void connectionsStore.removeMcp(name);
-                }}
-                setMcpEnabled={
-                  routeOpenworkStatus === "connected" && routeOpenworkCapabilities?.mcp?.write
-                    ? (name, enabled) => connectionsStore.setMcpEnabled(name, enabled)
-                    : undefined
-                }
-                readConfigFile={(scope) => connectionsStore.readMcpConfigFile(scope)}
-                installedSkills={[
-                  ...extensionItems.installedSkills,
-                  ...connectCapabilities.skills.filter(
-                    (skill) => !extensionItems.installedSkills.some(
-                      (installed) => installed.name.toLowerCase() === skill.name.toLowerCase(),
-                    ),
-                  ),
-                ]}
-                availableConnectMcpServers={connectCapabilities.mcpServers.filter(
-                  (entry) => !orgMcpConnectionItems.some((item) =>
-                    item.name.localeCompare(entry.name, undefined, { sensitivity: "accent" }) === 0
-                  ),
-                )}
-                availableConnectMcpStatuses={connectCapabilities.mcpStatuses}
-                inventoryLoading={connectCapabilitiesLoading || (orgMcpConnections.loading && !orgMcpConnections.loaded)}
-                installedPlugins={extensionItems.installedCloudPlugins}
-                orgMcpItems={orgMcpConnectionItems}
-                organizationName={cloudSession.activeOrgName}
-                orgMcpError={orgMcpConnections.error}
-                uninstallSkill={(name) => { void extensionsStore.uninstallSkill(name); }}
-                removeCloudPlugin={(pluginId) => { void extensionsStore.removeCloudOrgPlugin(pluginId); }}
-                orgMcpConnectingId={orgMcpConnections.connectingId}
-                connectOrgMcp={(connectionId) => { void orgMcpConnections.connect(connectionId); }}
-                reconnectOrgMcp={(connectionId) => { void orgMcpConnections.connect(connectionId, { forceFreshAuthorization: true }); }}
-                orgMcpDisconnectingId={orgMcpConnections.disconnectingId}
-                disconnectOrgMcp={(connectionId) => { void orgMcpConnections.disconnect(connectionId); }}
-                readSkill={(name) => extensionsStore.readSkill(name)}
-                previewClaudePlugin={(url) => extensionsStore.previewClaudePlugin(url)}
-                installClaudePlugin={(url) => extensionsStore.installClaudePlugin(url)}
-                initialFilter={initialFilter}
-                onFilterChange={onFilterChange}
-                initialState={initialState}
-                onStateChange={onStateChange}
-                detailId={detailId}
-                onDetailIdChange={onDetailIdChange}
-              />
-            )}
-
+            mcpView={mcpViewRenderProp}
           />
         );
       case "cloud-account":
@@ -2404,27 +2447,37 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
         );
       case "memory":
         return <MemoryView onOpenAccount={openCloudAccountSettings} />;
+      case "usage":
+        return <UsageView loadSummary={loadUsageSummary} />;
       case "im-connectors":
         return <ImConnectorsSection />;
-      case "cloud-providers":
+      case "connectors":
         return (
-          <CloudProvidersView
-            checkDesktopAppRestriction={checkDesktopRestriction}
-            cloudOrgProviders={providerAuthSnapshot.cloudOrgProviders}
-            connectCloudProvider={providerAuthStore.connectCloudProvider}
-            importedCloudProviders={providerAuthSnapshot.importedCloudProviders}
-            importsUnavailable={
-              openworkServerSnapshot.openworkServerCapabilities?.config?.read === false ||
-              openworkServerSnapshot.openworkServerCapabilities?.config?.write === false
-            }
-            lastSyncError={providerAuthSnapshot.lastSyncError}
-            openworkServerAvailable={Boolean(openworkServerSnapshot.openworkServerClient)}
-            onOpenAccount={openCloudAccountSettings}
-            refreshCloudOrgProviders={providerAuthStore.refreshCloudOrgProviders}
-            runCloudProviderSync={providerAuthStore.runCloudProviderSync}
-            serverSync={providerAuthSnapshot.cloudProviderServerSync}
+          <ConnectorsView
+            busy={busy}
+            selectedWorkspaceRoot={selectedWorkspaceRoot}
+            isRemoteWorkspace={isRemoteWorkspace}
+            canEditPlugins={canWriteWorkspacePlugins}
+            canUseGlobalScope={!isRemoteWorkspace}
+            accessHint={pluginsAccessHint}
+            suggestedPlugins={SUGGESTED_PLUGINS}
+            extensions={extensionsStore}
+            mcpView={mcpViewRenderProp}
+            onRefresh={() => {
+              void connectionsStore.syncCloudControlMcp({ force: true }).then(() => {
+                void connectionsStore.refreshMcpServers();
+              });
+              void extensionsStore.refreshPlugins();
+              void extensionsStore.refreshCloudOrgMarketplaces({ force: true });
+              void orgMcpConnections.refresh();
+              void refreshConnectCapabilities({ force: true });
+            }}
+            imConnectors={<ImConnectorsSection />}
+            cloudProviders={cloudProvidersView}
           />
         );
+      case "cloud-providers":
+        return <>{cloudProvidersView}</>;
       case "advanced":
         return (
           <AdvancedView
@@ -2752,4 +2805,27 @@ export function SettingsSurface(props: SettingsSurfaceProps) {
       <SettingsRouteContent {...props} />
     </CloudSessionProvider>
   );
+}
+
+/**
+ * 加载自有 key 用量汇总（BYO usage）。连接解析复用 openwork-connection 的
+ * 统一逻辑（桌面运行时/存储配置/网关），GET /api/usage/summary 由 openwork-server 提供。
+ */
+async function loadUsageSummary(): Promise<UsageSummary> {
+  const connection = await resolveOpenworkConnection();
+  const baseUrl = (connection.normalizedBaseUrl ?? "").replace(/\/+$/, "");
+  if (!baseUrl) {
+    return {
+      items: [],
+      totals: { requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0 },
+      generatedAt: Date.now(),
+    };
+  }
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (connection.resolvedToken) headers.Authorization = `Bearer ${connection.resolvedToken}`;
+  const response = await fetch(`${baseUrl}/api/usage/summary`, { headers });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return (await response.json()) as UsageSummary;
 }

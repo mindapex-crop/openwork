@@ -1,12 +1,14 @@
 /** @jsxImportSource react */
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { Agent } from "@opencode-ai/sdk/v2/client";
 
 import { createDenClient, readDenSettings } from "@/app/lib/den";
+import { useScreenRecording } from "@/react-app/domains/capture";
 import type { OpenworkServerClient } from "@/app/lib/openwork-server";
 import type { ComposerAttachment, McpServerEntry, McpStatusMap, ModelOption, ModelRef, SkillCard, SlashCommandOption } from "@/app/types";
 import { t } from "@/i18n";
-import { ReactSessionComposer } from "@/react-app/domains/session/surface/composer/composer";
+import { appendQuickCommandSuffixes, useQuickCommandsStore } from "@/react-app/domains/session/surface/composer/composer-quick-commands";
+import { ReactSessionComposer, type CapabilityManagerKind } from "@/react-app/domains/session/surface/composer/composer";
 import { encodeComposerMentionValue, type ComposerMentionKind } from "@/react-app/domains/session/surface/composer/mention-encoding";
 import {
   createPastedTextChip,
@@ -62,10 +64,20 @@ export type NewTaskComposerContext = {
   isRemoteWorkspace: boolean;
   isSandboxWorkspace: boolean;
   onOpenSettingsSection?: (section: "commands" | "skills" | "mcps" | "plugins" | "extensions") => void;
+  /** 跳转到智能体 / 连接器的管理页（WorkBuddy「管理连接器」对标）。 */
+  onOpenCapabilityManager?: (kind: CapabilityManagerKind) => void;
   /** Task execution mode chosen on the hero. Controls model-variant bias and
    *  automatic prompt framing (e.g. plan mode adds a planning preamble). */
   taskMode: TaskMode;
   onTaskModeChange?: (mode: TaskMode) => void;
+  /** 当前工作空间 + 切换（WorkBuddy "设置工作空间" 对标）。 */
+  workspaceLabel?: string;
+  workspaceOptions?: { id: string; label: string; active: boolean }[];
+  onWorkspaceSelect?: (workspaceId: string) => void;
+  onOpenCreateWorkspace?: () => void;
+  /** 权限模式（WorkBuddy "权限管理：默认权限 / 完全访问" 对标）。 */
+  permissionMode?: "manual" | "full";
+  onPermissionModeChange?: (mode: "manual" | "full") => void;
 };
 
 export type NewTaskComposerProps = {
@@ -73,6 +85,12 @@ export type NewTaskComposerProps = {
   onDraftChange: (value: string) => void;
   /** Called with a non-empty draft and in-memory attachments; the caller creates the session (and workspace if needed). */
   onRunTask: (resolvedDraft: string, attachments: ComposerAttachment[]) => void;
+  /**
+   * Plan-mode hook: called with the raw prompt when the user submits while
+   * taskMode is "plan". When set, the composer routes the submit to a planning
+   * flow instead of immediately creating a session.
+   */
+  onStartPlan?: (prompt: string) => void;
   /** Disable submission while a default workspace is being prepared. */
   busy: boolean;
   context: NewTaskComposerContext | null;
@@ -209,7 +227,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
     });
   };
 
-  const handleAttachFiles = (files: File[]) => {
+  const handleAttachFiles = useCallback((files: File[]) => {
     if (!files.length) return;
     const next: ComposerAttachment[] = files.map((file) => {
       const metadata = resolveAttachmentFileMetadata(file);
@@ -225,7 +243,9 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
     });
     setAttachments((current) => [...current, ...next]);
     props.onDraftChange(`${props.draft}${next.map((attachment) => `[attachment ${attachment.id}]`).join("")}`);
-  };
+  }, [props.draft, props.onDraftChange]);
+
+  const recording = useScreenRecording(handleAttachFiles);
 
   const handleRemoveAttachment = (id: string) => {
     setAttachments((current) => {
@@ -237,7 +257,17 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
   };
 
   const handleRunTask = () => {
-    props.onRunTask(resolvePastedTextPlaceholders(props.draft, pastedText), attachments);
+    const resolved = resolvePastedTextPlaceholders(props.draft, pastedText);
+    // Plan mode intercept: if a planning hook is wired in, route the draft to
+    // the planning flow instead of immediately spawning a session.
+    if (props.onStartPlan && context?.taskMode === "plan") {
+      props.onStartPlan(resolved);
+      return;
+    }
+    // Append codex-style quick command suffixes to the prompt.
+    const activeCommands = useQuickCommandsStore.getState().active;
+    const withSuffixes = appendQuickCommandSuffixes(resolved, activeCommands);
+    props.onRunTask(withSuffixes, attachments);
   };
 
   const handleUnsupportedFileLinks = (links: string[]) => {
@@ -246,6 +276,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
   };
 
   return (
+    <>
     <ReactSessionComposer
       draft={props.draft}
       mentions={mentions}
@@ -281,6 +312,14 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       modelVariant={context?.modelVariant ?? null}
       modelBehaviorOptions={context?.modelBehaviorOptions}
       onModelVariantChange={context?.onModelVariantChange ?? noop}
+      taskMode={context?.taskMode ?? "ask"}
+      onTaskModeChange={context?.onTaskModeChange ?? noop}
+      workspaceLabel={context?.workspaceLabel}
+      workspaceOptions={context?.workspaceOptions}
+      onWorkspaceSelect={context?.onWorkspaceSelect}
+      onOpenCreateWorkspace={context?.onOpenCreateWorkspace}
+      permissionMode={context?.permissionMode}
+      onPermissionModeChange={context?.onPermissionModeChange}
       agentLabel={context?.agentLabel ?? t("session.default_agent")}
       selectedAgent={context?.selectedAgent ?? null}
       agentIsCli={context?.agentIsCli}
@@ -295,6 +334,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       mcpStatus={mcpStatus}
       mcpStatuses={mcpStatuses}
       onOpenSettingsSection={context?.onOpenSettingsSection}
+      onOpenCapabilityManager={context?.onOpenCapabilityManager}
       recentFiles={[]}
       searchFiles={context?.searchFiles ?? emptyFiles}
       onInsertMention={handleInsertMention}
@@ -303,6 +343,7 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       pastedText={pastedText}
       onExpandPastedText={handleExpandPastedText}
       onRemovePastedText={handleRemovePastedText}
+      onRecordScreen={recording.openRecorder}
       isRemoteWorkspace={context?.isRemoteWorkspace ?? false}
       isSandboxWorkspace={context?.isSandboxWorkspace ?? false}
       onUploadInboxFiles={null}
@@ -310,6 +351,8 @@ export function NewTaskComposer(props: NewTaskComposerProps) {
       flush
       draftScopeKey={`new-task:${workspaceId ?? "chat-first"}`}
     />
+    {recording.dialog}
+    </>
   );
 }
 
